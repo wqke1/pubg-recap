@@ -1,8 +1,8 @@
 # PUBG recap — GitHub Actions
 
-Toutes les 30 min, GitHub :
+Toutes les 30 min (5 min si le repo est public : changer le cron dans `.github/workflows/pubg.yml`), GitHub :
 1. récupère les nouveaux matchs ranked du cercle ;
-2. poste le recap de la journée 45 min après le dernier match (si vous reprenez, l'ancien message est supprimé et reposté avec le cumul) ;
+2. poste le recap dès la première game et l'édite après chaque game (même lineup = même message, toute la journée) ;
 3. poste les nouveaux clips pubg.report ;
 4. sauvegarde `recap.db` dans le repo.
 
@@ -24,4 +24,4 @@ Onglet Actions → "PUBG recap" → "Run workflow" → cocher "Forcer le recap".
 
 ## Config
 
-`config.json` : `circle`, `aliases`, `idle_minutes` (délai sans match avant le recap auto), `day_cutoff_hour`. Les clés ne sont pas dans ce fichier, elles viennent des secrets.
+`config.json` : `circle`, `aliases`, `day_cutoff_hour`. Les clés ne sont pas dans ce fichier, elles viennent des secrets.

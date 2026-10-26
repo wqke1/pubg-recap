@@ -5,8 +5,7 @@
 - Garde uniquement les matchs ranked squad où >= 2 joueurs du cercle sont dans le même roster.
 - Une session = une journée de jeu (bascule à 6h, `day_cutoff_hour`) × un lineup du cercle.
 - `--recap` poste (ou met à jour) toutes les sessions de la journée.
-- Un seul message par session, posté `idle_minutes` après le dernier match ; si un match arrive ensuite,
-  l'ancien message est supprimé et un nouveau est posté avec le cumul.
+- Un message par session, posté dès le premier match et édité après chaque match.
 
     python3 pubg_recap.py           # boucle (laisser tourner)
     python3 pubg_recap.py --recap   # force le recap de la session en cours maintenant
@@ -271,21 +270,19 @@ def webhook_post(embed):
 
 
 def webhook_edit(message_id, embed):
-    """Mise à jour d'un recap = on supprime l'ancien message et on reposte en bas du salon."""
-    requests.delete(f"{WEBHOOK}/messages/{message_id}", timeout=30)  # 404 si déjà supprimé à la main, on s'en fiche
-    return webhook_post(embed)
+    r = requests.patch(f"{WEBHOOK}/messages/{message_id}", json={"embeds": [embed]}, timeout=30)
+    if r.status_code == 404:  # message supprimé à la main → on reposte
+        return webhook_post(embed)
+    r.raise_for_status()
+    return message_id
 
 
 def publish(groups, idx, force=False):
     group = groups[idx]
     key = group[0]["id"]
     row = DB.execute("SELECT message_id, n_matches FROM sessions WHERE first_match=?", (key,)).fetchone()
-    last_end = group[-1]["created_at"] + group[-1]["duration"]
-    if not force:
-        if row and row[1] == len(group):
-            return
-        if not row and time.time() - last_end < IDLE:
-            return
+    if not force and row and row[1] == len(group):
+        return  # rien de nouveau
 
     accounts = {}  # account id -> pseudo brut, ordre d'apparition
     for m in group:
