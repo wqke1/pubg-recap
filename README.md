@@ -1,6 +1,6 @@
 # PUBG recap — GitHub Actions
 
-Toutes les 5 min (repo public, minutes illimitées), GitHub :
+Un run GitHub tourne en continu (boucle de ~5h40, puis se relance lui-même via le secret `GH_PAT`). Toutes les 5 min, il :
 1. récupère les nouveaux matchs ranked du cercle ;
 2. poste le recap dès la première game et l'édite après chaque game (même lineup = même message, toute la journée) ;
 3. poste les nouveaux clips pubg.report ;
@@ -15,8 +15,13 @@ Toutes les 5 min (repo public, minutes illimitées), GitHub :
    - `PUBG_API_KEY`
    - `DISCORD_WEBHOOK`
    - `DISCORD_WEBHOOK_REPORTS`
+   - `GH_PAT` : token fine-grained (Settings → Developer settings → Fine-grained tokens), repo `pubg-recap` seul, permission Actions : Read and write. Sert au workflow pour se relancer.
 4. Settings → Actions → General → Workflow permissions → **Read and write permissions** → Save (nécessaire pour que le bot commit la base).
 5. Onglet Actions → "PUBG recap" → "Run workflow" pour un premier passage.
+
+## Si ça s'arrête
+
+Onglet Actions → "PUBG recap" → "Run workflow". Un seul run doit être en cours à la fois (le `concurrency` s'en charge).
 
 ## Forcer un recap
 

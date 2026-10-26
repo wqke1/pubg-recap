@@ -2,7 +2,7 @@ name: PUBG recap
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # toutes les 30 min (UTC, GitHub peut décaler de quelques minutes)
+    - cron: "*/30 * * * *"   # filet de sécurité si GitHub daigne un jour lancer le cron
   workflow_dispatch:
     inputs:
       recap:
@@ -10,6 +10,7 @@ on:
         type: boolean
         default: false
 
+# un seul run à la fois ; le suivant attend que le précédent finisse
 concurrency:
   group: pubg
   cancel-in-progress: false
@@ -20,6 +21,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     env:
       TZ: Europe/Paris
       PUBG_API_KEY: ${{ secrets.PUBG_API_KEY }}
@@ -31,18 +33,26 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q requests
-      - name: Recap + clips
-        run: |
-          if [ "${{ inputs.recap }}" = "true" ]; then
-            python pubg_recap.py --recap
-            python pubg_recap.py --reports
-          else
-            python pubg_recap.py --once
-          fi
-      - name: Sauvegarder la base
+
+      - name: Boucle (script toutes les 5 min pendant ~5h40)
         run: |
           git config user.name "pubg-bot"
           git config user.email "pubg-bot@users.noreply.github.com"
-          git add recap.db
-          git diff --cached --quiet || git commit -m "db $(date -u +%Y-%m-%dT%H:%M)" 
-          git push
+          if [ "${{ inputs.recap }}" = "true" ]; then
+            python pubg_recap.py --recap || true
+          fi
+          END=$((SECONDS + 340*60))
+          while [ $SECONDS -lt $END ]; do
+            echo "=== $(date '+%H:%M') ==="
+            git pull -q --rebase || true
+            python pubg_recap.py --once || true
+            git add recap.db
+            git diff --cached --quiet || { git commit -qm "db $(date -u +%Y-%m-%dT%H:%M)" && git push -q || true; }
+            sleep 300
+          done
+
+      - name: Relancer le run suivant
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: gh workflow run pubg.yml --repo ${{ github.repository }}
