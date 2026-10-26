@@ -1,0 +1,34 @@
+{
+  "pubg_api_key": "(secret GitHub PUBG_API_KEY)",
+  "discord_webhook": "(secret GitHub DISCORD_WEBHOOK)",
+  "discord_webhook_reports": "(secret GitHub DISCORD_WEBHOOK_REPORTS)",
+  "shard": "steam",
+  "idle_minutes": 45,
+  "day_cutoff_hour": 6,
+  "circle": [
+    "wqke_",
+    "wqke__",
+    "Snyler1",
+    "Snyler2",
+    "Snyler3",
+    "ciki999",
+    "ciki--",
+    "KUZZyy_",
+    "kuzzz-",
+    "BusIncoming",
+    "Wailren-"
+  ],
+  "aliases": {
+    "wqke_": "wqke",
+    "wqke__": "wqke",
+    "Snyler1": "Snyler",
+    "Snyler2": "Snyler",
+    "Snyler3": "Snyler",
+    "ciki999": "Kuzn",
+    "BusIncoming": "Kuzn",
+    "KUZZyy_": "Kuzn",
+    "kuzzz-": "Kuzn",
+    "ciki--": "ciki",
+    "Wailren-": "Wailren"
+  }
+}
