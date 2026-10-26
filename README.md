@@ -1,6 +1,6 @@
 # PUBG recap — GitHub Actions
 
-Toutes les 30 min (5 min si le repo est public : changer le cron dans `.github/workflows/pubg.yml`), GitHub :
+Toutes les 5 min (repo public, minutes illimitées), GitHub :
 1. récupère les nouveaux matchs ranked du cercle ;
 2. poste le recap dès la première game et l'édite après chaque game (même lineup = même message, toute la journée) ;
 3. poste les nouveaux clips pubg.report ;
