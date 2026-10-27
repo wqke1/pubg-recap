@@ -204,6 +204,19 @@ def split_randoms(agg, n):
     return players, randoms
 
 
+# Rating par joueur (1.00 = joueur moyen en ranked squad). Poids et valeurs de référence par partie.
+RATING_W = {"kills": 0.35, "assists": 0.15, "damage": 0.35, "survived": 0.15}
+RATING_REF = {"kills": 2.0, "assists": 1.5, "damage": 300.0, "survived": 15 * 60}
+
+
+def rating(st):
+    return sum(RATING_W[k] * (st[k] / st["games"]) / RATING_REF[k] for k in RATING_W)
+
+
+def rating_color(r):
+    return "#57f287" if r >= 1.15 else "#f2a900" if r >= 0.9 else "#ed4245"
+
+
 TIER_COLORS = {"Bronze": "#b0703a", "Silver": "#9aa5b1", "Gold": "#e3b341", "Platinum": "#4fd1c5",
                "Diamond": "#7aa2ff", "Master": "#d16bff", "Lunar": "#ffb3ec", "Survivor": "#ff6b6b"}
 
@@ -238,14 +251,18 @@ def recap_html(group, prev_group, rp_now, rp_prev):
         return f'<div class="badge" style="--c:{col}"><span class="dot"></span>{esc(tier)}<b>{rp} RP</b>{d}{who}</div>'
 
     rows = ""
-    for name, st in agg.items():
+    ranked_players = sorted(agg.items(), key=lambda kv: -rating(kv[1]))
+    for pos, (name, st) in enumerate(ranked_players, 1):
         hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
         dpp = st["damage"] / st["games"]
         badges = "".join(badge(t, rp, d, raw, name) for raw, t, rp, d in rp_by_alias.get(name, []))
         games = f'<span class="games">{st["games"]}/{n}</span>' if st["games"] < n else ""
+        rt = rating(st)
         rows += f"""
         <div class="row">
+          <div class="pos">{pos}</div>
           <div class="who"><div class="name">{esc(name)}{games}</div><div class="badges">{badges}</div></div>
+          <div class="stat rating" style="--c:{rating_color(rt)}"><b>{rt:.2f}</b><i>rating</i></div>
           <div class="stat"><b>{st['kills']}</b><i>kills</i></div>
           <div class="stat"><b>{st['assists']}</b><i>assists</i></div>
           <div class="stat dmg"><b>{dpp:.0f}</b><i>dég/p</i><div class="bar"><div style="width:{100 * dpp / max_dmg:.0f}%"></div></div></div>
@@ -258,7 +275,9 @@ def recap_html(group, prev_group, rp_now, rp_prev):
         hs = f"{100 * r['hs'] / r['kills']:.0f}%" if r["kills"] else "–"
         rows += f"""
         <div class="row random">
+          <div class="pos"></div>
           <div class="who"><div class="name">Randoms <span class="games">×{len(randoms)}</span></div></div>
+          <div class="stat rating"><b>{rating(r):.2f}</b><i>rating</i></div>
           <div class="stat"><b>{r['kills']}</b><i>kills</i></div>
           <div class="stat"><b>{r['assists']}</b><i>assists</i></div>
           <div class="stat dmg"><b>{r['damage'] / r['games']:.0f}</b><i>dég/p</i></div>
@@ -314,7 +333,10 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .row {{ display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px; }}
     .row:nth-child(odd) {{ background: #26282c; }}
     .row.random {{ opacity: .6; }}
-    .who {{ flex: 0 0 290px; }}
+    .pos {{ flex: 0 0 26px; font-size: 20px; font-weight: 800; color: #6d7079; text-align: center; }}
+    .row:first-child .pos {{ color: #f2a900; }}
+    .who {{ flex: 0 0 250px; }}
+    .stat.rating b {{ color: var(--c, #949ba4); }}
     .name {{ font-size: 18px; font-weight: 800; color: #fff; }}
     .games {{ font-size: 12px; color: #949ba4; font-weight: 600; margin-left: 8px; }}
     .badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }}
