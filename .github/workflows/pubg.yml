@@ -33,14 +33,14 @@ jobs:
           python-version: "3.12"
       - run: pip install -q requests
 
-      - name: Boucle (script toutes les 5 min pendant ~5h40)
+      - name: Boucle (script toutes les 5 min pendant ~5h30)
         run: |
           git config user.name "pubg-bot"
           git config user.email "pubg-bot@users.noreply.github.com"
           if [ "${{ inputs.recap }}" = "true" ]; then
             python pubg_recap.py --recap || true
           fi
-          END=$((SECONDS + 340*60))
+          END=$((SECONDS + 330*60))
           while [ $SECONDS -lt $END ]; do
             echo "=== $(date '+%H:%M') ==="
             git pull -q --rebase || true
@@ -51,7 +51,7 @@ jobs:
           done
 
       - name: Relancer le run suivant
-        if: always()
+        if: ${{ !cancelled() }}   # pas de relance si on a été coupé (par un "Forcer le recap" ou à la main)
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: gh workflow run pubg.yml --repo ${{ github.repository }}
