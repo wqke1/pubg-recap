@@ -1,8 +1,6 @@
 name: PUBG recap
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"   # filet de sécurité si GitHub daigne un jour lancer le cron
   workflow_dispatch:
     inputs:
       recap:
@@ -10,10 +8,11 @@ on:
         type: boolean
         default: false
 
-# un seul run à la fois ; le suivant attend que le précédent finisse
+# un seul run à la fois : le suivant attend que le précédent finisse,
+# sauf "Forcer le recap" qui coupe la boucle en cours et prend sa place
 concurrency:
   group: pubg
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event.inputs.recap == 'true' }}
 
 permissions:
   contents: write
