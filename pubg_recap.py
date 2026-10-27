@@ -324,8 +324,9 @@ def recap_html(group, prev_group, rp_now, rp_prev):
         dmg = sum(p["damage"] for p in m["players"])
         top = '<span class="top">🔥 top squad</span>' if m.get("top_kills") else ""
         cls = "win" if m["rank"] == 1 else "good" if m["rank"] <= 10 else ""
-        games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gm">{esc(m['map'])}</span>
-            <span class="gs">{k} kills</span><span class="gs">{dmg:,.0f} dég</span>{top}<span class="gr">#{m['rank']}</span></div>""".replace(",", " ")
+        surv = max(p["survived"] for p in m["players"])
+        games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gt">{datetime.fromtimestamp(m['created_at']):%Hh%M}</span><span class="gm">{esc(m['map'])}</span>
+            <span class="gs">{k} kills</span><span class="gs">{dmg:,.0f} dég</span><span class="gs">⏱ {fmt_time(surv)}</span>{top}<span class="gr">#{m['rank']}</span></div>""".replace(",", " ")
     names = ", ".join(agg.keys())
 
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -372,13 +373,14 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .title s {{ display: block; text-decoration: none; font-size: 12px; color: #b5bac1; }}
     .prev {{ margin-top: 18px; font-size: 14px; color: #949ba4; }}
     .prev .up {{ color: #57f287; font-weight: 700; }} .prev .down {{ color: #ed4245; font-weight: 700; }}
-    .games {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }}
-    .game {{ display: flex; align-items: center; gap: 10px; background: #26282c; border-radius: 8px; padding: 7px 12px; font-size: 14px; }}
+    .games {{ display: flex; flex-direction: column; gap: 6px; }}
+    .gt {{ color: #6d7079; font-size: 13px; width: 48px; }}
+    .game {{ display: flex; align-items: center; gap: 14px; background: #26282c; border-radius: 8px; padding: 7px 14px; font-size: 14px; }}
     .game.good {{ border-left: 3px solid #4fd1c5; }}
     .game.win {{ border-left: 3px solid #f2a900; background: #2e2a1e; }}
     .gi {{ color: #6d7079; font-weight: 700; width: 18px; }}
-    .gm {{ font-weight: 700; color: #fff; width: 86px; }}
-    .gs {{ color: #b5bac1; width: 80px; white-space: nowrap; }}
+    .gm {{ font-weight: 700; color: #fff; width: 90px; }}
+    .gs {{ color: #b5bac1; width: 90px; white-space: nowrap; }}
     .top {{ white-space: nowrap; font-size: 11px; font-weight: 700; color: #ff6b35; background: rgba(255,107,53,.15); border-radius: 999px; padding: 2px 8px; }}
     .gr {{ margin-left: auto; font-weight: 800; color: #fff; font-size: 16px; }}
     .game.win .gr {{ color: #f2a900; }}
