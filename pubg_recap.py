@@ -88,12 +88,18 @@ def parse_match(d):
     if a.get("matchType") != "competitive" or a.get("gameMode") != "squad":
         return None
     parts = {i["id"]: i["attributes"]["stats"] for i in d["included"] if i["type"] == "participant"}
-    for r in (i for i in d["included"] if i["type"] == "roster"):
+    rosters = [i for i in d["included"] if i["type"] == "roster"]
+    squad_kills = {r["id"]: sum(parts[p["id"]]["kills"] for p in r["relationships"]["participants"]["data"] if p["id"] in parts)
+                   for r in rosters}
+    for r in rosters:
         members = [parts[p["id"]] for p in r["relationships"]["participants"]["data"] if p["id"] in parts]
         if len({alias(s["name"]) for s in members} & CIRCLE) < 2:
             continue
         created = int(datetime.fromisoformat(a["createdAt"].replace("Z", "+00:00")).timestamp())
+        others = [k for rid, k in squad_kills.items() if rid != r["id"]]
         return {
+            "top_kills": squad_kills[r["id"]] > max(others, default=0),  # plus de kills que toutes les autres squads
+            "max_other_kills": max(others, default=0),
             "id": d["data"]["id"],
             "created_at": created,
             "duration": a["duration"],
@@ -312,10 +318,14 @@ def recap_html(group, prev_group, rp_now, rp_prev):
                 return f'<span class="{"up" if good else "down"}">{fmt.format(v)}</span>'
             prev_html = f'<div class="prev">vs session précédente &nbsp; dégâts {tr(dmg, True, "{:+.0%}")} · placement {tr(place, False)} · kills/p {tr(kills)}</div>'
 
-    maps = defaultdict(int)
-    for m in group:
-        maps[m["map"]] += 1
-    maps_html = " · ".join(f"{k} ×{v}" for k, v in sorted(maps.items(), key=lambda kv: -kv[1]))
+    games_html = ""
+    for i, m in enumerate(group, 1):
+        k = sum(p["kills"] for p in m["players"])
+        dmg = sum(p["damage"] for p in m["players"])
+        top = '<span class="top">🔥 top squad</span>' if m.get("top_kills") else ""
+        cls = "win" if m["rank"] == 1 else "good" if m["rank"] <= 10 else ""
+        games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gm">{esc(m['map'])}</span>
+            <span class="gs">{k} kills</span><span class="gs">{dmg:,.0f} dég</span>{top}<span class="gr">#{m['rank']}</span></div>""".replace(",", " ")
     names = ", ".join(agg.keys())
 
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
@@ -362,14 +372,23 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .title s {{ display: block; text-decoration: none; font-size: 12px; color: #b5bac1; }}
     .prev {{ margin-top: 18px; font-size: 14px; color: #949ba4; }}
     .prev .up {{ color: #57f287; font-weight: 700; }} .prev .down {{ color: #ed4245; font-weight: 700; }}
+    .games {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }}
+    .game {{ display: flex; align-items: center; gap: 10px; background: #26282c; border-radius: 8px; padding: 7px 12px; font-size: 14px; }}
+    .game.good {{ border-left: 3px solid #4fd1c5; }}
+    .game.win {{ border-left: 3px solid #f2a900; background: #2e2a1e; }}
+    .gi {{ color: #6d7079; font-weight: 700; width: 18px; }}
+    .gm {{ font-weight: 700; color: #fff; width: 86px; }}
+    .gs {{ color: #b5bac1; width: 80px; white-space: nowrap; }}
+    .top {{ white-space: nowrap; font-size: 11px; font-weight: 700; color: #ff6b35; background: rgba(255,107,53,.15); border-radius: 999px; padding: 2px 8px; }}
+    .gr {{ margin-left: auto; font-weight: 800; color: #fff; font-size: 16px; }}
+    .game.win .gr {{ color: #f2a900; }}
     .foot {{ margin-top: 14px; font-size: 13px; color: #6d7079; display: flex; justify-content: space-between; }}
     </style></head><body><div class="card">
       <h1>Session ranked — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
       <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(names)} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game</div>
       <div class="kpis">
         <div class="kpi"><b>#{sum(ranks) / n:.1f}</b><i>placement</i></div>
-        {f'<div class="kpi win"><b>🏆 {wins} <small>· {100 * wins / n:.0f}%</small></b><i>top 1</i></div>' if wins
-         else f'<div class="kpi"><b>0 <small>· best #{min(ranks)}</small></b><i>top 1</i></div>'}
+        <div class="kpi{' win' if wins else ''}"><b>{'🏆 ' if wins else ''}#{min(ranks)}{f' <small>×{wins}</small>' if wins > 1 else ''}</b><i>meilleur</i></div>
         <div class="kpi"><b>{top10}/{n}</b><i>top 10</i></div>
         <div class="kpi"><b>{sum(v['kills'] for v in agg_all.values())}</b><i>kills</i></div>
         <div class="kpi"><b>{f"{sum(v['damage'] for v in agg_all.values()):,.0f}".replace(",", " ")}</b><i>dégâts</i></div>
@@ -378,7 +397,9 @@ def recap_html(group, prev_group, rp_now, rp_prev):
       <h2>Titres</h2>
       <div class="titles">{titles_html}</div>
       {prev_html}
-      <div class="foot"><span>{esc(maps_html)}</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
+      <h2>Parties</h2>
+      <div class="games">{games_html}</div>
+      <div class="foot"><span></span><span>mis à jour {datetime.now():%Hh%M}</span></div>
     </div></body></html>"""
 
 
@@ -435,9 +456,12 @@ def publish(groups, idx, force=False):
         for p in m["players"]:
             accounts.setdefault(p["account"], p["name"])
     rp_now = [(acc, raw, ranked_stats(acc)) for acc, raw in accounts.items()]
-    prev = DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC LIMIT 1",
-                      (key, group[0]["created_at"])).fetchone()
-    rp_prev = json.loads(prev[0]) if prev and prev[0] else {}
+    # dernier RP connu de chaque compte, toutes sessions précédentes confondues
+    rp_prev = {}
+    for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
+                                 (key, group[0]["created_at"])):
+        for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
+            rp_prev.setdefault(acc, rp)
     prev_group = next((g for g in reversed(groups[:idx]) if lineup(g[0]) == lineup(group[0])), None)
     embed, png = build_recap(group, prev_group, rp_now, rp_prev)
 
