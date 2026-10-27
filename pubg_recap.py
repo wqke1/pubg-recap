@@ -296,7 +296,7 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     mvp = max(agg.items(), key=lambda kv: kv[1]["damage"] / kv[1]["games"])
     killer = max(agg.items(), key=lambda kv: kv[1]["kills"])
     medic = max(agg.items(), key=lambda kv: kv[1]["revives"])
-    titles = [("💥", "MVP", mvp[0], f"{mvp[1]['damage'] / mvp[1]['games']:.0f} dég/p"),
+    titles = [("💥", "Dégâts", mvp[0], f"{mvp[1]['damage'] / mvp[1]['games']:.0f} dég/p"),
               ("🔪", "Tueur", killer[0], f"{killer[1]['kills']} kills"),
               ("🎯", "Sniper", sniper[0], f"{sniper[1]['longest']:.0f} m"),
               ("🚑", "Médecin", medic[0], f"{medic[1]['revives']} revives"),
