@@ -31,7 +31,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q requests
+      - run: |
+          pip install -q requests playwright
+          python -m playwright install --with-deps chromium > /dev/null
+          sudo apt-get install -y -qq fonts-noto-color-emoji > /dev/null
 
       - name: Boucle (script toutes les 5 min pendant ~5h30)
         run: |

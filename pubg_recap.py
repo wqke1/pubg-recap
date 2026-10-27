@@ -204,7 +204,15 @@ def split_randoms(agg, n):
     return players, randoms
 
 
-def build_recap(group, prev_group, rp_now, rp_prev):
+TIER_COLORS = {"Bronze": "#b0703a", "Silver": "#9aa5b1", "Gold": "#e3b341", "Platinum": "#4fd1c5",
+               "Diamond": "#7aa2ff", "Master": "#d16bff", "Lunar": "#ffb3ec", "Survivor": "#ff6b6b"}
+
+
+def esc(t):
+    return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def recap_html(group, prev_group, rp_now, rp_prev):
     agg_all = aggregate(group)
     n = len(group)
     agg, randoms = split_randoms(agg_all, n)
@@ -215,45 +223,62 @@ def build_recap(group, prev_group, rp_now, rp_prev):
     wins = sum(r == 1 for r in ranks)
     top10 = sum(r <= 10 for r in ranks)
     first_death = max(agg.items(), key=lambda kv: kv[1]["first_death"])
+    max_dmg = max(v["damage"] / v["games"] for v in agg.values()) or 1
 
-    names = " · ".join(f"{k} ({v['games']})" if v["games"] < n else k for k, v in agg.items())
-    desc = [f"**{n} partie{'s' if n > 1 else ''}** · {names} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game",
-            "",
-            f"🏁 Placement moyen **#{sum(ranks) / n:.1f}** · Meilleur **#{min(ranks)}**" + (f" 🏆 ×{wins}" if wins else "") + f" · Top 10 **{top10}/{n}**",
-            f"🔪 **{sum(v['kills'] for v in agg_all.values())}** kills · 💥 **{sum(v['damage'] for v in agg_all.values()):,.0f}** dégâts · ☠️ Mort 1er : {first_death[0]} ×{first_death[1]['first_death']}".replace(",", " ")]
-
-    # RP par alias (un joueur peut avoir plusieurs comptes dans la session)
     rp_by_alias = defaultdict(list)
     for acc, raw, r in rp_now:
-        if r:
-            delta = f" ({r['rp'] - rp_prev[acc]:+d})" if acc in rp_prev else ""
-            rp_by_alias[alias(raw)].append(f"🏅 {r['tier']} · {r['rp']} RP{delta}" + (f" · {raw}" if alias(raw) != raw else ""))
+        if r and alias(raw) not in randoms:
+            delta = r["rp"] - rp_prev[acc] if acc in rp_prev else None
+            rp_by_alias[alias(raw)].append((raw, r["tier"], r["rp"], delta))
 
-    fields = []
+    def badge(tier, rp, delta, raw, name):
+        col = TIER_COLORS.get(tier.split()[0], "#aaa")
+        d = "" if delta is None else f'<span class="delta {"up" if delta >= 0 else "down"}">{delta:+d}</span>'
+        who = f'<span class="acc">{esc(raw)}</span>' if raw != name else ""
+        return f'<div class="badge" style="--c:{col}"><span class="dot"></span>{esc(tier)}<b>{rp} RP</b>{d}{who}</div>'
+
+    rows = ""
     for name, st in agg.items():
         hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
-        lines = [f"**{st['kills']}** K · {st['assists']} A · **{st['damage'] / st['games']:.0f}** dég/p",
-                 f"HS {hs} · ⏱ {fmt_time(st['survived'] / st['games'])} · 🚑 {st['revives']}"]
-        lines += rp_by_alias.get(name, [])
-        label = name if st["games"] == n else f"{name} ({st['games']}/{n})"
-        fields.append({"name": label, "value": "\n".join(lines), "inline": True})
+        dpp = st["damage"] / st["games"]
+        badges = "".join(badge(t, rp, d, raw, name) for raw, t, rp, d in rp_by_alias.get(name, []))
+        games = f'<span class="games">{st["games"]}/{n}</span>' if st["games"] < n else ""
+        rows += f"""
+        <div class="row">
+          <div class="who"><div class="name">{esc(name)}{games}</div><div class="badges">{badges}</div></div>
+          <div class="stat"><b>{st['kills']}</b><i>kills</i></div>
+          <div class="stat"><b>{st['assists']}</b><i>assists</i></div>
+          <div class="stat dmg"><b>{dpp:.0f}</b><i>dég/p</i><div class="bar"><div style="width:{100 * dpp / max_dmg:.0f}%"></div></div></div>
+          <div class="stat"><b>{hs}</b><i>HS</i></div>
+          <div class="stat"><b>{fmt_time(st['survived'] / st['games'])}</b><i>survie</i></div>
+          <div class="stat"><b>{st['revives']}</b><i>revives</i></div>
+        </div>"""
     if randoms:
-        r = {k: sum(v[k] for v in randoms.values()) for k in ("games", "kills", "assists", "damage")}
-        fields.append({"name": f"Randoms ({len(randoms)})", "value": f"{r['kills']} K · {r['assists']} A · {r['damage'] / r['games']:.0f} dég/p", "inline": True})
-    while len(fields) % 3:  # complète la rangée pour un alignement propre sur PC
-        fields.append({"name": "\u200b", "value": "\u200b", "inline": True})
+        r = {k: sum(v[k] for v in randoms.values()) for k in ("games", "kills", "assists", "damage", "hs", "survived", "revives")}
+        hs = f"{100 * r['hs'] / r['kills']:.0f}%" if r["kills"] else "–"
+        rows += f"""
+        <div class="row random">
+          <div class="who"><div class="name">Randoms <span class="games">×{len(randoms)}</span></div></div>
+          <div class="stat"><b>{r['kills']}</b><i>kills</i></div>
+          <div class="stat"><b>{r['assists']}</b><i>assists</i></div>
+          <div class="stat dmg"><b>{r['damage'] / r['games']:.0f}</b><i>dég/p</i></div>
+          <div class="stat"><b>{hs}</b><i>HS</i></div>
+          <div class="stat"><b>{fmt_time(r['survived'] / r['games'])}</b><i>survie</i></div>
+          <div class="stat"><b>{r['revives']}</b><i>revives</i></div>
+        </div>"""
 
     sniper = max(agg.items(), key=lambda kv: kv[1]["longest"])
     mvp = max(agg.items(), key=lambda kv: kv[1]["damage"] / kv[1]["games"])
     killer = max(agg.items(), key=lambda kv: kv[1]["kills"])
     medic = max(agg.items(), key=lambda kv: kv[1]["revives"])
-    fields.append({"name": "Titres", "inline": False, "value": "\n".join([
-        f"💥 **MVP** {mvp[0]} · {mvp[1]['damage'] / mvp[1]['games']:.0f} dég/p",
-        f"🔪 **Tueur** {killer[0]} · {killer[1]['kills']} kills",
-        f"🎯 **Sniper** {sniper[0]} · {sniper[1]['longest']:.0f} m",
-        f"🚑 **Médecin** {medic[0]} · {medic[1]['revives']} revives",
-        f"💀 **Premier mort** {first_death[0]} · {first_death[1]['first_death']}/{first_death[1]['games']}"])})
+    titles = [("💥", "MVP", mvp[0], f"{mvp[1]['damage'] / mvp[1]['games']:.0f} dég/p"),
+              ("🔪", "Tueur", killer[0], f"{killer[1]['kills']} kills"),
+              ("🎯", "Sniper", sniper[0], f"{sniper[1]['longest']:.0f} m"),
+              ("🚑", "Médecin", medic[0], f"{medic[1]['revives']} revives"),
+              ("💀", "Premier mort", first_death[0], f"{first_death[1]['first_death']}/{first_death[1]['games']}")]
+    titles_html = "".join(f'<div class="title"><span class="ico">{i}</span><div><i>{t}</i><b>{esc(w)}</b><s>{v}</s></div></div>' for i, t, w, v in titles)
 
+    prev_html = ""
     if prev_group:
         pa, _ = split_randoms(aggregate(prev_group), len(prev_group))
         common = [k for k in agg if k in pa]
@@ -263,36 +288,114 @@ def build_recap(group, prev_group, rp_now, rp_prev):
             dmg = avg(agg, "damage") / avg(pa, "damage") - 1
             place = sum(m["rank"] for m in group) / n - sum(m["rank"] for m in prev_group) / len(prev_group)
             kills = avg(agg, "kills") - avg(pa, "kills")
-            fields.append({"name": "vs session précédente", "inline": False,
-                           "value": f"dégâts **{dmg:+.0%}** · placement **{place:+.1f}** · kills/p **{kills:+.1f}**"})
+            def tr(v, good_if_positive=True, fmt="{:+.1f}"):
+                good = (v >= 0) == good_if_positive
+                return f'<span class="{"up" if good else "down"}">{fmt.format(v)}</span>'
+            prev_html = f'<div class="prev">vs session précédente &nbsp; dégâts {tr(dmg, True, "{:+.0%}")} · placement {tr(place, False)} · kills/p {tr(kills)}</div>'
 
     maps = defaultdict(int)
     for m in group:
         maps[m["map"]] += 1
-    footer = " · ".join(f"{k} ×{v}" for k, v in sorted(maps.items(), key=lambda kv: -kv[1]))
-    footer += f"   •   mis à jour {datetime.now():%Hh%M}"
+    maps_html = " · ".join(f"{k} ×{v}" for k, v in sorted(maps.items(), key=lambda kv: -kv[1]))
+    names = ", ".join(agg.keys())
 
-    return {
-        "title": f"🐔  Session ranked — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
-        "description": "\n".join(desc),
-        "fields": fields,
-        "footer": {"text": footer},
-        "color": 0xF2A900,
-    }
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 960px; }}
+    .card {{ padding: 28px 32px 22px; border-left: 6px solid #f2a900; }}
+    h1 {{ margin: 0; font-size: 26px; font-weight: 800; color: #fff; letter-spacing: -.3px; }}
+    .sub {{ color: #949ba4; font-size: 15px; margin-top: 4px; }}
+    .kpis {{ display: flex; gap: 12px; margin: 20px 0 22px; }}
+    .kpi {{ flex: 1; background: #2b2d31; border-radius: 10px; padding: 12px 14px; }}
+    .kpi b {{ display: block; font-size: 24px; font-weight: 800; color: #fff; white-space: nowrap; }}
+    .kpi i {{ font-style: normal; font-size: 12px; color: #949ba4; text-transform: uppercase; letter-spacing: .5px; }}
+    .kpi.win b {{ color: #f2a900; }}
+    .row {{ display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px; }}
+    .row:nth-child(odd) {{ background: #26282c; }}
+    .row.random {{ opacity: .6; }}
+    .who {{ flex: 0 0 290px; }}
+    .name {{ font-size: 18px; font-weight: 800; color: #fff; }}
+    .games {{ font-size: 12px; color: #949ba4; font-weight: 600; margin-left: 8px; }}
+    .badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }}
+    .badge {{ display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c);
+              background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 3px 9px 3px 7px; }}
+    .badge .dot {{ width: 8px; height: 8px; border-radius: 50%; background: var(--c); }}
+    .badge b {{ color: #fff; font-weight: 700; }}
+    .badge .acc {{ color: #949ba4; font-weight: 500; }}
+    .delta.up {{ color: #57f287; }} .delta.down {{ color: #ed4245; }}
+    .stat {{ flex: 1; text-align: center; }}
+    .stat b {{ display: block; font-size: 19px; font-weight: 800; color: #fff; }}
+    .stat i {{ font-style: normal; font-size: 11px; color: #949ba4; text-transform: uppercase; letter-spacing: .4px; }}
+    .stat.dmg {{ flex: 1.4; }}
+    .bar {{ height: 4px; background: #3a3c42; border-radius: 2px; margin: 6px 10px 0; overflow: hidden; }}
+    .bar div {{ height: 100%; background: linear-gradient(90deg, #f2a900, #ff6b35); border-radius: 2px; }}
+    h2 {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #949ba4; margin: 22px 0 10px; }}
+    .titles {{ display: flex; gap: 10px; }}
+    .title {{ flex: 1; background: #2b2d31; border-radius: 10px; padding: 10px 12px; display: flex; gap: 10px; align-items: center; }}
+    .title .ico {{ font-size: 22px; }}
+    .title i {{ display: block; font-style: normal; font-size: 11px; color: #949ba4; text-transform: uppercase; }}
+    .title b {{ display: block; font-size: 15px; color: #fff; }}
+    .title s {{ display: block; text-decoration: none; font-size: 12px; color: #b5bac1; }}
+    .prev {{ margin-top: 18px; font-size: 14px; color: #949ba4; }}
+    .prev .up {{ color: #57f287; font-weight: 700; }} .prev .down {{ color: #ed4245; font-weight: 700; }}
+    .foot {{ margin-top: 14px; font-size: 13px; color: #6d7079; display: flex; justify-content: space-between; }}
+    </style></head><body><div class="card">
+      <h1>Session ranked — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
+      <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(names)} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game</div>
+      <div class="kpis">
+        <div class="kpi"><b>#{sum(ranks) / n:.1f}</b><i>placement</i></div>
+        <div class="kpi win"><b>{'🏆 ' if wins else ''}#{min(ranks)}{f' ×{wins}' if wins > 1 else ''}</b><i>meilleur</i></div>
+        <div class="kpi"><b>{top10}/{n}</b><i>top 10</i></div>
+        <div class="kpi"><b>{sum(v['kills'] for v in agg_all.values())}</b><i>kills</i></div>
+        <div class="kpi"><b>{f"{sum(v['damage'] for v in agg_all.values()):,.0f}".replace(",", " ")}</b><i>dégâts</i></div>
+        <div class="kpi"><b>{esc(first_death[0])} ×{first_death[1]['first_death']}</b><i>mort 1er</i></div>
+      </div>
+      <div class="rows">{rows}</div>
+      <h2>Titres</h2>
+      <div class="titles">{titles_html}</div>
+      {prev_html}
+      <div class="foot"><span>{esc(maps_html)}</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
+    </div></body></html>"""
+
+
+def render_png(html):
+    """HTML → PNG via Chromium headless (Playwright)."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        pg = b.new_page(viewport={"width": 960, "height": 600}, device_scale_factor=2)
+        pg.set_content(html, wait_until="networkidle")
+        png = pg.screenshot(full_page=True)
+        b.close()
+    return png
+
+
+def build_recap(group, prev_group, rp_now, rp_prev):
+    """Retourne (embed, png_bytes)."""
+    start = group[0]["created_at"]
+    end = group[-1]["created_at"] + group[-1]["duration"]
+    embed = {"title": f"🐔  Session ranked — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
+             "color": 0xF2A900, "image": {"url": "attachment://recap.png"}}
+    return embed, render_png(recap_html(group, prev_group, rp_now, rp_prev))
 
 
 # ---------------------------------------------------------------- Discord (webhook)
 
-def webhook_post(embed):
-    r = requests.post(WEBHOOK, params={"wait": "true"}, json={"embeds": [embed]}, timeout=30)
+def webhook_post(embed, png):
+    payload = {"embeds": [embed], "attachments": []}
+    r = requests.post(WEBHOOK, params={"wait": "true"}, data={"payload_json": json.dumps(payload)},
+                      files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
     r.raise_for_status()
     return r.json()["id"]
 
 
-def webhook_edit(message_id, embed):
-    r = requests.patch(f"{WEBHOOK}/messages/{message_id}", json={"embeds": [embed]}, timeout=30)
+def webhook_edit(message_id, embed, png):
+    payload = {"embeds": [embed], "attachments": []}  # attachments vide = on remplace l'ancienne image
+    r = requests.patch(f"{WEBHOOK}/messages/{message_id}", data={"payload_json": json.dumps(payload)},
+                       files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
     if r.status_code == 404:  # message supprimé à la main → on reposte
-        return webhook_post(embed)
+        return webhook_post(embed, png)
     r.raise_for_status()
     return message_id
 
@@ -313,9 +416,9 @@ def publish(groups, idx, force=False):
                       (key, group[0]["created_at"])).fetchone()
     rp_prev = json.loads(prev[0]) if prev and prev[0] else {}
     prev_group = next((g for g in reversed(groups[:idx]) if lineup(g[0]) == lineup(group[0])), None)
-    embed = build_recap(group, prev_group, rp_now, rp_prev)
+    embed, png = build_recap(group, prev_group, rp_now, rp_prev)
 
-    msg_id = webhook_edit(row[0], embed) if row and row[0] else webhook_post(embed)
+    msg_id = webhook_edit(row[0], embed, png) if row and row[0] else webhook_post(embed, png)
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
     DB.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?,?)",
                (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store)))
