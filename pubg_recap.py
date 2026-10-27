@@ -322,7 +322,7 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     for i, m in enumerate(group, 1):
         k = sum(p["kills"] for p in m["players"])
         dmg = sum(p["damage"] for p in m["players"])
-        top = '<span class="top">🔥 top</span>' if m.get("top_kills") else ""
+        top = '<span class="top">🔥</span>' if m.get("top_kills") else ""
         cls = "win" if m["rank"] == 1 else "good" if m["rank"] <= 10 else ""
         surv = max(p["survived"] for p in m["players"])
         games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gt">{datetime.fromtimestamp(m['created_at']):%Hh%M}</span><span class="gm">{esc(m['map'])}</span>
@@ -381,7 +381,8 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .gi {{ color: #6d7079; font-weight: 700; width: 16px; }}
     .gm {{ font-weight: 700; color: #fff; width: 64px; font-size: 14px; }}
     .gs {{ color: #b5bac1; width: 62px; white-space: nowrap; }}
-    .top {{ white-space: nowrap; font-size: 10px; font-weight: 700; color: #ff6b35; background: rgba(255,107,53,.15); border-radius: 999px; padding: 2px 8px; }}
+    .top {{ margin-left: auto; font-size: 15px; }}
+    .top + .gr {{ margin-left: 0; }}
     .gr {{ margin-left: auto; font-weight: 800; color: #fff; font-size: 15px; }}
     .game.win .gr {{ color: #f2a900; }}
     .foot {{ margin-top: 14px; font-size: 13px; color: #6d7079; display: flex; justify-content: space-between; }}
