@@ -322,7 +322,7 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     for i, m in enumerate(group, 1):
         k = sum(p["kills"] for p in m["players"])
         dmg = sum(p["damage"] for p in m["players"])
-        top = '<span class="top">🔥 top squad</span>' if m.get("top_kills") else ""
+        top = '<span class="top">🔥 top</span>' if m.get("top_kills") else ""
         cls = "win" if m["rank"] == 1 else "good" if m["rank"] <= 10 else ""
         surv = max(p["survived"] for p in m["players"])
         games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gt">{datetime.fromtimestamp(m['created_at']):%Hh%M}</span><span class="gm">{esc(m['map'])}</span>
@@ -373,16 +373,16 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .title s {{ display: block; text-decoration: none; font-size: 12px; color: #b5bac1; }}
     .prev {{ margin-top: 18px; font-size: 14px; color: #949ba4; }}
     .prev .up {{ color: #57f287; font-weight: 700; }} .prev .down {{ color: #ed4245; font-weight: 700; }}
-    .games {{ display: flex; flex-direction: column; gap: 6px; }}
-    .gt {{ color: #6d7079; font-size: 13px; width: 48px; }}
-    .game {{ display: flex; align-items: center; gap: 14px; background: #26282c; border-radius: 8px; padding: 7px 14px; font-size: 14px; }}
+    .games {{ display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: column; gap: 6px 12px; }}
+    .gt {{ color: #6d7079; font-size: 12px; width: 40px; }}
+    .game {{ display: flex; align-items: center; gap: 8px; background: #26282c; border-radius: 8px; padding: 7px 10px; font-size: 13px; border-left: 3px solid transparent; }}
     .game.good {{ border-left: 3px solid #4fd1c5; }}
     .game.win {{ border-left: 3px solid #f2a900; background: #2e2a1e; }}
-    .gi {{ color: #6d7079; font-weight: 700; width: 18px; }}
-    .gm {{ font-weight: 700; color: #fff; width: 90px; }}
-    .gs {{ color: #b5bac1; width: 90px; white-space: nowrap; }}
-    .top {{ white-space: nowrap; font-size: 11px; font-weight: 700; color: #ff6b35; background: rgba(255,107,53,.15); border-radius: 999px; padding: 2px 8px; }}
-    .gr {{ margin-left: auto; font-weight: 800; color: #fff; font-size: 16px; }}
+    .gi {{ color: #6d7079; font-weight: 700; width: 16px; }}
+    .gm {{ font-weight: 700; color: #fff; width: 64px; font-size: 14px; }}
+    .gs {{ color: #b5bac1; width: 62px; white-space: nowrap; }}
+    .top {{ white-space: nowrap; font-size: 10px; font-weight: 700; color: #ff6b35; background: rgba(255,107,53,.15); border-radius: 999px; padding: 2px 8px; }}
+    .gr {{ margin-left: auto; font-weight: 800; color: #fff; font-size: 15px; }}
     .game.win .gr {{ color: #f2a900; }}
     .foot {{ margin-top: 14px; font-size: 13px; color: #6d7079; display: flex; justify-content: space-between; }}
     </style></head><body><div class="card">
@@ -400,7 +400,7 @@ def recap_html(group, prev_group, rp_now, rp_prev):
       <div class="titles">{titles_html}</div>
       {prev_html}
       <h2>Parties</h2>
-      <div class="games">{games_html}</div>
+      <div class="games" style="grid-template-rows: repeat({(n + 1) // 2}, auto)">{games_html}</div>
       <div class="foot"><span></span><span>mis à jour {datetime.now():%Hh%M}</span></div>
     </div></body></html>"""
 
