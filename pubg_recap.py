@@ -193,53 +193,69 @@ def fmt_dt(ts):
     return f"{JOURS[d.weekday()]} {d.day} {MOIS[d.month - 1]}, {d:%Hh%M}"
 
 
+def split_randoms(agg, n):
+    """Hors cercle et moins de la moitié des parties → random. Retourne (joueurs, randoms)."""
+    players, randoms = {}, {}
+    for name, s in agg.items():
+        if name in CIRCLE or s["games"] * 2 >= n:
+            players[name] = s
+        else:
+            randoms[name] = s
+    return players, randoms
+
+
 def build_recap(group, prev_group, rp_now, rp_prev):
-    agg = aggregate(group)
+    agg_all = aggregate(group)
     n = len(group)
+    agg, randoms = split_randoms(agg_all, n)
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
-    dur = sum(m["duration"] for m in group)  # temps réellement passé en partie
-
-    header_names = ", ".join(f"{k} ({v['games']})" if v["games"] < n else k for k, v in agg.items())
-    L = [f"{n} partie{'s' if n > 1 else ''} · {header_names} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game", ""]
-
+    dur = sum(m["duration"] for m in group)
     ranks = [m["rank"] for m in group]
     wins = sum(r == 1 for r in ranks)
     top10 = sum(r <= 10 for r in ranks)
     first_death = max(agg.items(), key=lambda kv: kv[1]["first_death"])
-    L += ["SQUAD",
-          f"Placement moyen   #{sum(ranks) / n:<6.1f} Meilleur   #{min(ranks)}" + (f" 🏆 ×{wins}" if wins else ""),
-          f"Kills             {sum(v['kills'] for v in agg.values()):<7} Dégâts     {sum(v['damage'] for v in agg.values()):,.0f}".replace(",", " "),
-          f"Top 10            {top10}/{n:<5} Mort 1er   {first_death[0]} ×{first_death[1]['first_death']}", ""]
 
-    L += ["PAR JOUEUR", f"{'':12} Parties  K   A   Dég/p   HS%   Surv   Rev"]
-    for name, s in agg.items():
-        hs = f"{100 * s['hs'] / s['kills']:.0f}%" if s["kills"] else "–"
-        L.append(f"{name:12} {s['games']:>5}  {s['kills']:>3} {s['assists']:>3}   {s['damage'] / s['games']:>5.0f}  {hs:>4}  {fmt_time(s['survived'] / s['games']):>5}  {s['revives']:>3}")
-    L.append("")
+    names = " · ".join(f"{k} ({v['games']})" if v["games"] < n else k for k, v in agg.items())
+    desc = [f"**{n} partie{'s' if n > 1 else ''}** · {names} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game",
+            "",
+            f"🏁 Placement moyen **#{sum(ranks) / n:.1f}** · Meilleur **#{min(ranks)}**" + (f" 🏆 ×{wins}" if wins else "") + f" · Top 10 **{top10}/{n}**",
+            f"🔪 **{sum(v['kills'] for v in agg_all.values())}** kills · 💥 **{sum(v['damage'] for v in agg_all.values()):,.0f}** dégâts · ☠️ Mort 1er : {first_death[0]} ×{first_death[1]['first_death']}".replace(",", " ")]
 
-    if any(r for _, _, r in rp_now):
-        L.append("RANKED")
-        for acc, raw, r in rp_now:
-            if not r:
-                continue
-            delta = f"({r['rp'] - rp_prev[acc]:+d})" if acc in rp_prev else ""
-            L.append(f"{raw:12} {r['tier']:<13} {r['rp']:>5} RP   {delta}")
-        L.append("")
+    # RP par alias (un joueur peut avoir plusieurs comptes dans la session)
+    rp_by_alias = defaultdict(list)
+    for acc, raw, r in rp_now:
+        if r:
+            delta = f" ({r['rp'] - rp_prev[acc]:+d})" if acc in rp_prev else ""
+            rp_by_alias[alias(raw)].append(f"🏅 {r['tier']} · {r['rp']} RP{delta}" + (f" · {raw}" if alias(raw) != raw else ""))
+
+    fields = []
+    for name, st in agg.items():
+        hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
+        lines = [f"**{st['kills']}** K · {st['assists']} A · **{st['damage'] / st['games']:.0f}** dég/p",
+                 f"HS {hs} · ⏱ {fmt_time(st['survived'] / st['games'])} · 🚑 {st['revives']}"]
+        lines += rp_by_alias.get(name, [])
+        label = name if st["games"] == n else f"{name} ({st['games']}/{n})"
+        fields.append({"name": label, "value": "\n".join(lines), "inline": True})
+    if randoms:
+        r = {k: sum(v[k] for v in randoms.values()) for k in ("games", "kills", "assists", "damage")}
+        fields.append({"name": f"Randoms ({len(randoms)})", "value": f"{r['kills']} K · {r['assists']} A · {r['damage'] / r['games']:.0f} dég/p", "inline": True})
+    while len(fields) % 3:  # complète la rangée pour un alignement propre sur PC
+        fields.append({"name": "\u200b", "value": "\u200b", "inline": True})
 
     sniper = max(agg.items(), key=lambda kv: kv[1]["longest"])
     mvp = max(agg.items(), key=lambda kv: kv[1]["damage"] / kv[1]["games"])
     killer = max(agg.items(), key=lambda kv: kv[1]["kills"])
     medic = max(agg.items(), key=lambda kv: kv[1]["revives"])
-    L += ["TITRES",
-          f"💥 MVP            {mvp[0]} — {mvp[1]['damage'] / mvp[1]['games']:.0f} dég/partie",
-          f"🔪 Tueur          {killer[0]} — {killer[1]['kills']} kills",
-          f"🎯 Sniper         {sniper[0]} — kill à {sniper[1]['longest']:.0f} m",
-          f"🚑 Médecin        {medic[0]} — {medic[1]['revives']} revives",
-          f"💀 Premier mort   {first_death[0]} — {first_death[1]['first_death']} fois sur {first_death[1]['games']}", ""]
+    fields.append({"name": "Titres", "inline": False, "value": "\n".join([
+        f"💥 **MVP** {mvp[0]} · {mvp[1]['damage'] / mvp[1]['games']:.0f} dég/p",
+        f"🔪 **Tueur** {killer[0]} · {killer[1]['kills']} kills",
+        f"🎯 **Sniper** {sniper[0]} · {sniper[1]['longest']:.0f} m",
+        f"🚑 **Médecin** {medic[0]} · {medic[1]['revives']} revives",
+        f"💀 **Premier mort** {first_death[0]} · {first_death[1]['first_death']}/{first_death[1]['games']}"])})
 
     if prev_group:
-        pa = aggregate(prev_group)
+        pa, _ = split_randoms(aggregate(prev_group), len(prev_group))
         common = [k for k in agg if k in pa]
         if common:
             def avg(a, key):
@@ -247,16 +263,20 @@ def build_recap(group, prev_group, rp_now, rp_prev):
             dmg = avg(agg, "damage") / avg(pa, "damage") - 1
             place = sum(m["rank"] for m in group) / n - sum(m["rank"] for m in prev_group) / len(prev_group)
             kills = avg(agg, "kills") - avg(pa, "kills")
-            L += [f"vs session précédente : dégâts {dmg:+.0%} · placement {place:+.1f} · kills/p {kills:+.1f}", ""]
+            fields.append({"name": "vs session précédente", "inline": False,
+                           "value": f"dégâts **{dmg:+.0%}** · placement **{place:+.1f}** · kills/p **{kills:+.1f}**"})
 
     maps = defaultdict(int)
     for m in group:
         maps[m["map"]] += 1
-    L.append(" · ".join(f"{k} ×{v}" for k, v in sorted(maps.items(), key=lambda kv: -kv[1])))
+    footer = " · ".join(f"{k} ×{v}" for k, v in sorted(maps.items(), key=lambda kv: -kv[1]))
+    footer += f"   •   mis à jour {datetime.now():%Hh%M}"
 
     return {
         "title": f"🐔  Session ranked — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
-        "description": "```\n" + "\n".join(L) + "\n```",
+        "description": "\n".join(desc),
+        "fields": fields,
+        "footer": {"text": footer},
         "color": 0xF2A900,
     }
 
