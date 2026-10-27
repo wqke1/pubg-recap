@@ -330,6 +330,7 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .kpi b {{ display: block; font-size: 24px; font-weight: 800; color: #fff; white-space: nowrap; }}
     .kpi i {{ font-style: normal; font-size: 12px; color: #949ba4; text-transform: uppercase; letter-spacing: .5px; }}
     .kpi.win b {{ color: #f2a900; }}
+    .kpi small {{ font-size: 15px; font-weight: 600; color: #949ba4; }}
     .row {{ display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px; }}
     .row:nth-child(odd) {{ background: #26282c; }}
     .row.random {{ opacity: .6; }}
@@ -367,11 +368,11 @@ def recap_html(group, prev_group, rp_now, rp_prev):
       <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(names)} · {int(dur // 3600)}h{int(dur % 3600 // 60):02d} en game</div>
       <div class="kpis">
         <div class="kpi"><b>#{sum(ranks) / n:.1f}</b><i>placement</i></div>
-        <div class="kpi win"><b>{'🏆 ' if wins else ''}#{min(ranks)}{f' ×{wins}' if wins > 1 else ''}</b><i>meilleur</i></div>
+        {f'<div class="kpi win"><b>🏆 {wins} <small>· {100 * wins / n:.0f}%</small></b><i>top 1</i></div>' if wins
+         else f'<div class="kpi"><b>0 <small>· best #{min(ranks)}</small></b><i>top 1</i></div>'}
         <div class="kpi"><b>{top10}/{n}</b><i>top 10</i></div>
         <div class="kpi"><b>{sum(v['kills'] for v in agg_all.values())}</b><i>kills</i></div>
         <div class="kpi"><b>{f"{sum(v['damage'] for v in agg_all.values()):,.0f}".replace(",", " ")}</b><i>dégâts</i></div>
-        <div class="kpi"><b>{esc(first_death[0])} ×{first_death[1]['first_death']}</b><i>mort 1er</i></div>
       </div>
       <div class="rows">{rows}</div>
       <h2>Titres</h2>
