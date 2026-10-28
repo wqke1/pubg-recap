@@ -211,12 +211,17 @@ def split_randoms(agg, n):
 
 
 # Rating par joueur (1.00 = joueur moyen en ranked squad). Poids et valeurs de référence par partie.
-RATING_W = {"kills": 0.35, "assists": 0.15, "damage": 0.35, "survived": 0.15}
+RATING_W = {"kills": 0.41, "assists": 0.18, "damage": 0.41}
 RATING_REF = {"kills": 2.0, "assists": 1.5, "damage": 300.0, "survived": 15 * 60}
 
 
-def rating(st):
-    return sum(RATING_W[k] * (st[k] / st["games"]) / RATING_REF[k] for k in RATING_W)
+def rating(st, n=None):
+    """Moyenne par partie ; si le joueur n'a pas fait toutes les parties (n), on le ramène vers 1.00
+    au prorata de sa présence (3 bonnes games ne valent pas 6)."""
+    r = sum(RATING_W[k] * (st[k] / st["games"]) / RATING_REF[k] for k in RATING_W)
+    if n:
+        r = 1 + (r - 1) * st["games"] / n
+    return r
 
 
 def rating_color(r):
@@ -257,13 +262,13 @@ def recap_html(group, prev_group, rp_now, rp_prev):
         return f'<div class="badge" style="--c:{col}"><span class="dot"></span>{esc(tier)}<b>{rp} RP</b>{d}{who}</div>'
 
     rows = ""
-    ranked_players = sorted(agg.items(), key=lambda kv: -rating(kv[1]))
+    ranked_players = sorted(agg.items(), key=lambda kv: -rating(kv[1], n))
     for pos, (name, st) in enumerate(ranked_players, 1):
         hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
         dpp = st["damage"] / st["games"]
         badges = "".join(badge(t, rp, d, raw, name) for raw, t, rp, d in rp_by_alias.get(name, []))
         games = f'<span class="games">{st["games"]}/{n}</span>' if st["games"] < n else ""
-        rt = rating(st)
+        rt = rating(st, n)
         rows += f"""
         <div class="row">
           <div class="pos">{pos}</div>
