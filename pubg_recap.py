@@ -225,7 +225,7 @@ def rating(st, n=None):
 
 
 def rating_color(r):
-    return "#57f287" if r >= 1.15 else "#f2a900" if r >= 0.9 else "#ed4245"
+    return "#57f287" if r >= 1.25 else "#f2a900" if r >= 0.75 else "#ed4245"
 
 
 TIER_COLORS = {"Bronze": "#b0703a", "Silver": "#9aa5b1", "Gold": "#e3b341", "Platinum": "#4fd1c5",
