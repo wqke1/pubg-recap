@@ -565,7 +565,7 @@ def build_recap(group, rp_now, rp_prev):
     return embed, render_png(recap_html(group, rp_now, rp_prev))
 
 
-def detail_html(group, rp_now, rp_prev):
+def detail_html(group, rp_now, rp_prev, width=1640):
     """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur.
     Une seule image, deux tableaux côte à côte (Combat / Damage / Damage taken, puis Survival / Utility / Movement) :
     une image en hauteur serait réduite par Discord jusqu'à l'illisible."""
@@ -657,7 +657,7 @@ def detail_html(group, rp_now, rp_prev):
             best = max((x for x in nums if x is not None), default=0)
             body += f'<tr><td class="l">{label}</td>'
             for c, x in zip(cells, nums):
-                cls = ' class="z"' if x == 0 else ' class="top"' if x is not None and best > 0 and x == best else ""
+                cls = ' class="z"' if x == 0 or c is None or c == "–" else ' class="top"' if x is not None and best > 0 and x == best else ""
                 body += f"<td{cls}>{c if c is not None else '–'}</td>"
             body += "</tr>"
       bodies.append(body)
@@ -667,7 +667,7 @@ def detail_html(group, rp_now, rp_prev):
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 1640px; }}
+    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: {width}px; }}
     .card {{ padding: 24px 28px 16px; border-left: 6px solid #5865f2; }}
     .cols {{ display: flex; gap: 36px; align-items: flex-start; }} .cols table {{ flex: 1; }}
     h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
@@ -699,7 +699,9 @@ def build_detail(group, rp_now, rp_prev):
     end = group[-1]["created_at"] + group[-1]["duration"]
     title = f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}"
     embed = {"title": title, "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
-    return [embed], [("detail.png", render_png(detail_html(group, rp_now, rp_prev), width=1640))]
+    shown = len(split_randoms(aggregate(group), len(group))[0])
+    width = max(1640, 2 * (230 + 120 * shown) + 100)  # colonnes ≥ 120 px quand il y a plus de 4 joueurs
+    return [embed], [("detail.png", render_png(detail_html(group, rp_now, rp_prev, width), width=width))]
 
 
 # ---------------------------------------------------------------- Discord (webhook)
