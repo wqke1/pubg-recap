@@ -560,8 +560,10 @@ def build_recap(group, rp_now, rp_prev):
     return embed, render_png(recap_html(group, rp_now, rp_prev))
 
 
-def detail_html(group, rp_now, rp_prev):
-    """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur."""
+def detail_html(group, rp_now, rp_prev, part=1):
+    """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur.
+    Deux images (part 1 : Combat / Damage / Damage taken, part 2 : Survival / Utility / Movement),
+    sinon l'image est trop haute et Discord la réduit jusqu'à l'illisible."""
     agg_all = aggregate(group)
     n = len(group)
     agg, randoms = split_randoms(agg_all, n)
@@ -628,7 +630,7 @@ def detail_html(group, rp_now, rp_prev):
         head += f'<th><b>{esc(name)}{games}</b>{badge}</th>'
     head += "</tr>"
     body = ""
-    for title, color, rows in SECTIONS:
+    for title, color, rows in (SECTIONS[:3] if part == 1 else SECTIONS[3:]):
         body += f'<tr class="grp"><td colspan="{len(players) + 1}" style="--c:{color}"><span>{title}</span></td></tr>'
         for label, fn in rows:
             body += f'<tr><td class="l">{label}</td>' + "".join(
@@ -642,19 +644,19 @@ def detail_html(group, rp_now, rp_prev):
     .card {{ padding: 24px 28px 16px; border-left: 6px solid #5865f2; }}
     h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
     .sub {{ color: #949ba4; font-size: 13px; margin-top: 3px; }}
-    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 13.5px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 16px; }}
     th {{ text-align: center; padding: 4px 8px 10px; vertical-align: bottom; border-bottom: 2px solid #3a3c42; }}
-    th b {{ display: block; font-size: 16px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
+    th b {{ display: block; font-size: 19px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
     th.l {{ text-align: left; color: #949ba4; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }}
     .badge {{ display: inline-block; margin-top: 4px; font-size: 10.5px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }}
     .badge em {{ font-style: normal; }} .badge em.up {{ color: #57f287; }} .badge em.down {{ color: #ed4245; }}
-    td {{ padding: 6px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
+    td {{ padding: 7px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
     td.l {{ text-align: left; color: #b5bac1; font-weight: 500; }}
     tr.grp td {{ padding: 12px 0 4px; border: 0; text-align: left; }}
     tr.grp span {{ display: inline-block; color: var(--c); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; border-left: 3px solid var(--c); padding-left: 8px; }}
     .foot {{ margin-top: 12px; font-size: 10.5px; color: #6d7079; display: flex; justify-content: space-between; gap: 16px; }} .foot span:last-child {{ white-space: nowrap; }}
     </style></head><body><div class="card">
-      <h1>Player stats — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
+      <h1>Player stats {part}/2 — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
       <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(", ".join(agg.keys()))} · damage excludes hits on downed players{note}</div>
       <table>{head}{body}</table>
       <div class="foot"><span>Stolen = you finished a player knocked by another team · Lost = your knock finished by another team · KAS = share of games with a kill, an assist or survival</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
@@ -664,27 +666,34 @@ def detail_html(group, rp_now, rp_prev):
 def build_detail(group, rp_now, rp_prev):
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
-    embed = {"title": f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
-             "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
-    return embed, render_png(detail_html(group, rp_now, rp_prev), width=820)
+    title = f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}"
+    embeds = [{"title": title, "color": 0x5865F2, "image": {"url": "attachment://detail1.png"}},
+              {"color": 0x5865F2, "image": {"url": "attachment://detail2.png"}}]
+    pngs = [(f"detail{i}.png", render_png(detail_html(group, rp_now, rp_prev, part=i), width=820)) for i in (1, 2)]
+    return embeds, pngs
 
 
 # ---------------------------------------------------------------- Discord (webhook)
 
-def webhook_post(embed, png, fname="recap.png"):
-    payload = {"embeds": [embed], "attachments": []}
+def _files(pngs):
+    """pngs : liste de (nom, bytes) ; un embed par image, toutes dans le même message."""
+    return {f"files[{i}]": (name, png, "image/png") for i, (name, png) in enumerate(pngs)}
+
+
+def webhook_post(embeds, pngs):
+    payload = {"embeds": embeds, "attachments": []}
     r = requests.post(WEBHOOK, params={"wait": "true"}, data={"payload_json": json.dumps(payload)},
-                      files={"files[0]": (fname, png, "image/png")}, timeout=60)
+                      files=_files(pngs), timeout=60)
     r.raise_for_status()
     return r.json()["id"]
 
 
-def webhook_edit(message_id, embed, png, fname="recap.png"):
-    payload = {"embeds": [embed], "attachments": []}  # attachments vide = on remplace l'ancienne image
+def webhook_edit(message_id, embeds, pngs):
+    payload = {"embeds": embeds, "attachments": []}  # attachments vide = on remplace les anciennes images
     r = requests.patch(f"{WEBHOOK}/messages/{message_id}", data={"payload_json": json.dumps(payload)},
-                       files={"files[0]": (fname, png, "image/png")}, timeout=60)
+                       files=_files(pngs), timeout=60)
     if r.status_code == 404:  # message supprimé à la main → on reposte
-        return webhook_post(embed, png, fname)
+        return webhook_post(embeds, pngs)
     r.raise_for_status()
     return message_id
 
@@ -712,13 +721,13 @@ def publish(groups, idx, force=False):
                 rp_prev.setdefault(acc, rp)
     embed, png = build_recap(group, rp_now, rp_prev)
 
-    msg_id = webhook_edit(row[0], embed, png) if row and row[0] else webhook_post(embed, png)
+    msg_id = webhook_edit(row[0], [embed], [("recap.png", png)]) if row and row[0] else webhook_post([embed], [("recap.png", png)])
     # second message "Player stats" juste en dessous, même session
     detail_id = row[2] if row else None
     if CONFIG.get("detail", True):
         try:
-            d_embed, d_png = build_detail(group, rp_now, rp_prev)
-            detail_id = webhook_edit(detail_id, d_embed, d_png, "detail.png") if detail_id else webhook_post(d_embed, d_png, "detail.png")
+            d_embeds, d_pngs = build_detail(group, rp_now, rp_prev)
+            detail_id = webhook_edit(detail_id, d_embeds, d_pngs) if detail_id else webhook_post(d_embeds, d_pngs)
         except Exception as e:
             print("player stats :", repr(e))
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
