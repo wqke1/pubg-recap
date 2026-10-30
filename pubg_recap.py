@@ -50,7 +50,7 @@ for col in ("detail_id INTEGER", "rp_start TEXT"):
         pass  # colonne déjà là
 if not DB.execute("SELECT 1 FROM kv WHERE k='fix_rp_start'").fetchone():
     # sessions d'avant les relevés RP : point de départ figé à tort sur un relevé postérieur → on le retire
-    DB.execute("UPDATE sessions SET rp_start=NULL WHERE started_at < 1793450000")  # 2026-10-30 12h00 Paris
+    DB.execute("UPDATE sessions SET rp_start=NULL WHERE started_at < 1793358000")  # 2026-10-30 12h00 Paris
     DB.execute("INSERT INTO kv VALUES ('fix_rp_start', '1')")
     DB.commit()
 
