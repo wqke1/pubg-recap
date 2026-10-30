@@ -439,8 +439,8 @@ def recap_html(group, rp_now, rp_prev):
           <div class="stat rating" style="--c:{rating_color(rt)}"><b>{rt:.2f}</b><i>rating</i></div>
           <div class="stat"><b>{st['kills']}</b><i>kills</i></div>
           <div class="stat"><b>{st['assists']}</b><i>assists</i></div>
-          <div class="stat"><b>{kda:.1f}</b><i>KDA</i></div>
           <div class="stat dmg"><b>{dpp:.0f}</b><i>dég/p</i><div class="bar"><div style="width:{100 * dpp / max_dmg:.0f}%"></div></div></div>
+          <div class="stat"><b>{kda:.1f}</b><i>KDA</i></div>
           <div class="stat"><b>{fmt_time(st['survived'] / st['games'])}</b><i>survie</i></div>
         </div>"""
 
