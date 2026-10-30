@@ -160,7 +160,12 @@ def telemetry_stats(url, accounts):
             cat = ev.get("damageTypeCategory", "")
             if a in st and v not in st and cat != "Damage_Groggy":  # on exclut les dégâts sur un joueur déjà au sol
                 if cat == "Damage_Gun":
-                    st[a]["dmg_" + weapon_class(ev.get("damageCauserName", "")).lower()] += dmg
+                    cls = weapon_class(ev.get("damageCauserName", ""))
+                    st[a]["dmg_" + cls.lower()] += dmg
+                    if cls == "other":
+                        st[a].setdefault("other_weapons", {})
+                        w = ev.get("damageCauserName", "?")
+                        st[a]["other_weapons"][w] = round(st[a]["other_weapons"].get(w, 0) + dmg)
                 elif cat == "Damage_Explosion_Grenade":
                     st[a]["dmg_gren"] += dmg
                 elif cat == "Damage_Molotov":
@@ -190,7 +195,7 @@ def telemetry_stats(url, accounts):
                 key = "gren" if "Grenade" in item else "smoke" if "Smoke" in item else "flash" if "Flash" in item else "molo" if "Molotov" in item else None
                 if key:
                     st[a][key] += 1
-    return {a: {k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()} for a, d in st.items()}
+    return {a: {k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()} for a, d in st.items()}  # other_weapons : noms non classés, pour compléter WEAPON_CLASS
 
 
 def enrich_telemetry(m):
