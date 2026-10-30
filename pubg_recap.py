@@ -752,16 +752,19 @@ def publish(groups, idx, force=False):
             for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
                 rp_prev.setdefault(acc, rp)
     embed, png = build_recap(group, rp_now, rp_prev)
-
-    msg_id = webhook_edit(row[0], [embed], [("recap.png", png)]) if row and row[0] else webhook_post([embed], [("recap.png", png)])
-    # second message "Player stats" juste en dessous, même session
-    detail_id = row[2] if row else None
-    if CONFIG.get("detail", True):
+    embeds, pngs = [embed], [("recap.png", png)]
+    if CONFIG.get("detail", True):  # Player stats dans le même message, second embed
         try:
             d_embeds, d_pngs = build_detail(group, rp_now, rp_prev)
-            detail_id = webhook_edit(detail_id, d_embeds, d_pngs) if detail_id else webhook_post(d_embeds, d_pngs)
+            embeds += d_embeds
+            pngs += d_pngs
         except Exception as e:
             print("player stats :", repr(e))
+    msg_id = webhook_edit(row[0], embeds, pngs) if row and row[0] else webhook_post(embeds, pngs)
+    detail_id = row[2] if row else None
+    if detail_id:  # ancien second message (sessions d'avant la fusion) → on le supprime
+        requests.delete(f"{WEBHOOK}/messages/{detail_id}", timeout=30)
+        detail_id = None
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
     DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id, rp_start) VALUES (?,?,?,?,?,?,?)",
                (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id, json.dumps(rp_prev)))
