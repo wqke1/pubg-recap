@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS sessions (first_match TEXT PRIMARY KEY, started_at IN
 CREATE TABLE IF NOT EXISTS kv       (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS reports  (id TEXT PRIMARY KEY);
 """)
+try:
+    DB.execute("ALTER TABLE sessions ADD COLUMN detail_id INTEGER")
+except sqlite3.OperationalError:
+    pass  # colonne déjà là
 
 MAPS = {
     "Baltic_Main": "Erangel", "Desert_Main": "Miramar", "Savage_Main": "Sanhok", "DihorOtok_Main": "Vikendi",
@@ -140,7 +144,13 @@ def weapon_class(causer):
 
 
 TELE_KEYS = ("dmg_ar", "dmg_dmr", "dmg_sr", "dmg_smg", "dmg_lmg", "dmg_sg", "dmg_other", "dmg_gren", "dmg_molo",
-             "taken", "taken_zone", "stolen", "lost", "knocked", "revived", "gren", "smoke", "flash", "molo")
+             "taken", "taken_zone", "stolen", "lost", "knocked", "revived", "gren", "smoke", "flash", "molo",
+             "pick_gren", "pick_molo", "pick_smoke", "pick_flash", "drop_gren", "drop_molo", "drop_smoke", "drop_flash", "healed")
+TELE_VERSION = 2  # incrémenter quand on ajoute des clés → le backfill recomplète les matchs récents
+
+
+def throwable_kind(item_id):
+    return "gren" if "Grenade" in item_id else "molo" if "Molotov" in item_id else "smoke" if "Smoke" in item_id else "flash" if "Flash" in item_id else None
 
 
 def telemetry_stats(url, accounts):
@@ -152,6 +162,9 @@ def telemetry_stats(url, accounts):
 
     def acc(c):
         return (c or {}).get("accountId")
+
+    def team(c):
+        return (c or {}).get("teamId")
 
     for ev in events:
         t = ev.get("_T")
@@ -180,10 +193,13 @@ def telemetry_stats(url, accounts):
             if v in st:
                 st[v]["knocked"] += 1
         elif t == "LogPlayerKillV2":
-            f, m = acc(ev.get("finisher")), acc(ev.get("dBNOMaker"))
-            if f in st and m in st and f != m:
-                st[f]["stolen"] += 1
-                st[m]["lost"] += 1
+            # définition Twire : stolen = tu finis un joueur knock par une AUTRE équipe ; lost = ton knock fini par une autre équipe
+            fin, mak = ev.get("finisher"), ev.get("dBNOMaker")
+            if fin and mak and team(fin) != team(mak):
+                if acc(fin) in st:
+                    st[acc(fin)]["stolen"] += 1
+                if acc(mak) in st:
+                    st[acc(mak)]["lost"] += 1
         elif t == "LogPlayerRevive":
             v = acc(ev.get("victim"))
             if v in st:
@@ -191,10 +207,21 @@ def telemetry_stats(url, accounts):
         elif t == "LogPlayerUseThrowable":
             a = acc(ev.get("attacker"))
             if a in st:
-                item = (ev.get("weapon") or {}).get("itemId", "")
-                key = "gren" if "Grenade" in item else "smoke" if "Smoke" in item else "flash" if "Flash" in item else "molo" if "Molotov" in item else None
+                key = throwable_kind((ev.get("weapon") or {}).get("itemId", ""))
                 if key:
                     st[a][key] += 1
+        elif t in ("LogItemPickup", "LogItemDrop"):
+            a = acc(ev.get("character"))
+            if a in st:
+                key = throwable_kind((ev.get("item") or {}).get("itemId", ""))
+                if key:
+                    st[a][("pick_" if t == "LogItemPickup" else "drop_") + key] += 1
+        elif t == "LogHeal":
+            a = acc(ev.get("character"))
+            if a in st:
+                st[a]["healed"] += ev.get("healAmount", 0)
+    for d in st.values():
+        d["v"] = TELE_VERSION
     return {a: {k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()} for a, d in st.items()}  # other_weapons : noms non classés, pour compléter WEAPON_CLASS
 
 
@@ -216,7 +243,7 @@ def backfill_telemetry(days=7):
     """Complète la télémétrie des matchs récents stockés sans (une fois)."""
     since = time.time() - days * 86400
     rows = [(i, json.loads(d)) for i, d in DB.execute("SELECT id, data FROM matches WHERE created_at > ?", (since,))]
-    todo = [(i, m) for i, m in rows if any("tele" not in p for p in m["players"])]
+    todo = [(i, m) for i, m in rows if any(not p.get("tele") or p["tele"].get("v", 1) < TELE_VERSION for p in m["players"])]
     print(f"télémétrie : {len(todo)} matchs à compléter")
     for k, (mid, m) in enumerate(todo, 1):
         if not m.get("telemetry"):
@@ -316,6 +343,8 @@ def aggregate(group):
                 s["first_death"] += 1
             if p["account"] in order:
                 s["death_order"][order[p["account"]]] += 1
+            if p["kills"] or p["assists"] or p["alive"]:
+                s["kas"] = s.get("kas", 0) + 1
             if p.get("tele"):
                 s["tele_games"] += 1
                 for k in TELE_KEYS:
@@ -565,6 +594,115 @@ def build_recap(group, prev_group, rp_now, rp_prev):
     return embed, render_png(recap_html(group, prev_group, rp_now, rp_prev))
 
 
+def detail_html(group, rp_now, rp_prev):
+    """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur."""
+    agg_all = aggregate(group)
+    n = len(group)
+    agg, randoms = split_randoms(agg_all, n)
+    players = sorted(agg.items(), key=lambda kv: -rating(kv[1], n))
+    start = group[0]["created_at"]
+    end = group[-1]["created_at"] + group[-1]["duration"]
+    rp_by_alias = {}
+    for acc, raw, r in rp_now:
+        if r and alias(raw) not in randoms and alias(raw) not in rp_by_alias:
+            delta = r["rp"] - rp_prev[acc] if acc in rp_prev else None
+            rp_by_alias[alias(raw)] = (r["tier"], r["rp"], delta)
+
+    def num(v, d=0):
+        return f"{v:,.{d}f}".replace(",", " ")
+
+    def tm(sec):
+        return f"{int(sec // 3600)}:{int(sec % 3600 // 60):02d}:{int(sec % 60):02d}" if sec >= 3600 else fmt_time(sec)
+
+    T = lambda s: s["tele"]
+    deaths = lambda s: max(1, sum(s["death_order"]))
+    tele = lambda f: (lambda s: f(s) if s["tele_games"] else None)
+    SECTIONS = [
+        ("Combat", "#f2a900", [
+            ("Matches", lambda s: s["games"]), ("Kills", lambda s: s["kills"]), ("Assists", lambda s: s["assists"]),
+            ("KDA", lambda s: f"{(s['kills'] + s['assists']) / deaths(s):.2f}"), ("KD", lambda s: f"{s['kills'] / deaths(s):.2f}"),
+            ("KAS", lambda s: f"{s.get('kas', 0) / s['games']:.2f}"), ("Knocks", lambda s: s["dbnos"]),
+            ("Kills / Knocks", lambda s: f"{s['kills'] / s['dbnos']:.2f}" if s["dbnos"] else "–"),
+            ("Headshot kills", lambda s: s["hs"]), ("Longest kill (m)", lambda s: num(s["longest"])),
+            ("Stolen kills", tele(lambda s: T(s)["stolen"])), ("Lost kills", tele(lambda s: T(s)["lost"]))]),
+        ("Damage", "#ff6b35", [
+            ("Damage dealt", lambda s: num(s["damage"])), ("Avg damage dealt", lambda s: num(s["damage"] / s["games"])),
+            ("AR damage", tele(lambda s: num(T(s)["dmg_ar"]))), ("DMR damage", tele(lambda s: num(T(s)["dmg_dmr"]))),
+            ("SR damage", tele(lambda s: num(T(s)["dmg_sr"]))), ("SMG damage", tele(lambda s: num(T(s)["dmg_smg"]))),
+            ("Grenade damage", tele(lambda s: num(T(s)["dmg_gren"]))), ("Molotov damage", tele(lambda s: num(T(s)["dmg_molo"])))]),
+        ("Damage taken", "#ed4245", [
+            ("Damage taken", tele(lambda s: num(T(s)["taken"] + T(s)["taken_zone"]))),
+            ("Avg damage taken", tele(lambda s: num((T(s)["taken"] + T(s)["taken_zone"]) / s["games"]))),
+            ("Taken (enemy)", tele(lambda s: num(T(s)["taken"]))), ("Taken (zone)", tele(lambda s: num(T(s)["taken_zone"]))),
+            ("Dealt / Taken", tele(lambda s: f"{s['damage'] / T(s)['taken']:.2f}" if T(s)["taken"] else "–"))]),
+        ("Survival", "#4fd1c5", [
+            ("Died 1st", lambda s: s["death_order"][0]), ("Died 2nd", lambda s: s["death_order"][1]),
+            ("Died 3rd", lambda s: s["death_order"][2]), ("Died 4th", lambda s: s["death_order"][3]),
+            ("Alive at end", lambda s: s["games"] - sum(s["death_order"])),
+            ("Knocked", tele(lambda s: T(s)["knocked"])), ("Revived", tele(lambda s: T(s)["revived"])), ("Revives", lambda s: s["revives"]),
+            ("Time survived", lambda s: tm(s["survived"])), ("Avg time survived", lambda s: tm(s["survived"] / s["games"]))]),
+        ("Utility", "#7aa2ff", [
+            ("Grenades picked", tele(lambda s: T(s)["pick_gren"])), ("Grenades dropped", tele(lambda s: T(s)["drop_gren"])), ("Grenades thrown", tele(lambda s: T(s)["gren"])),
+            ("Molotovs picked", tele(lambda s: T(s)["pick_molo"])), ("Molotovs dropped", tele(lambda s: T(s)["drop_molo"])), ("Molotovs thrown", tele(lambda s: T(s)["molo"])),
+            ("Smokes picked", tele(lambda s: T(s)["pick_smoke"])), ("Smokes dropped", tele(lambda s: T(s)["drop_smoke"])), ("Smokes thrown", tele(lambda s: T(s)["smoke"])),
+            ("Flashes picked", tele(lambda s: T(s)["pick_flash"])), ("Flashes dropped", tele(lambda s: T(s)["drop_flash"])), ("Flashes thrown", tele(lambda s: T(s)["flash"])),
+            ("Heals", lambda s: s["heals"]), ("Boosts", lambda s: s["boosts"]), ("Health recovered", tele(lambda s: num(T(s)["healed"])))]),
+        ("Movement", "#949ba4", [
+            ("Distance (km)", lambda s: f"{s['dist'] / 1000:.1f}"), ("Vehicle destroys", lambda s: s["vehicles"])]),
+    ]
+    head = '<tr><th class="l">Stat</th>'
+    for name, st in players:
+        rp = rp_by_alias.get(name)
+        badge = ""
+        if rp:
+            col = TIER_COLORS.get(rp[0].split()[0], "#aaa")
+            delta = f' <em class="{"up" if rp[2] >= 0 else "down"}">{rp[2]:+d}</em>' if rp[2] is not None else ""
+            badge = f'<span class="badge" style="--c:{col}">{esc(rp[0])} · {rp[1]}{delta}</span>'
+        games = "" if st["games"] == n else f' <small>{st["games"]}/{n}</small>'
+        head += f'<th><b>{esc(name)}{games}</b>{badge}</th>'
+    head += "</tr>"
+    body = ""
+    for title, color, rows in SECTIONS:
+        body += f'<tr class="grp"><td colspan="{len(players) + 1}" style="--c:{color}"><span>{title}</span></td></tr>'
+        for label, fn in rows:
+            body += f'<tr><td class="l">{label}</td>' + "".join(
+                f"<td>{v if (v := fn(st)) is not None else '–'}</td>" for _, st in players) + "</tr>"
+    partial = any(st["tele_games"] < st["games"] for _, st in players)
+    note = " · telemetry partial on older matches" if partial else ""
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 820px; }}
+    .card {{ padding: 24px 28px 16px; border-left: 6px solid #5865f2; }}
+    h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
+    .sub {{ color: #949ba4; font-size: 13px; margin-top: 3px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 13.5px; }}
+    th {{ text-align: center; padding: 4px 8px 10px; vertical-align: bottom; border-bottom: 2px solid #3a3c42; }}
+    th b {{ display: block; font-size: 16px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
+    th.l {{ text-align: left; color: #949ba4; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }}
+    .badge {{ display: inline-block; margin-top: 4px; font-size: 10.5px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }}
+    .badge em {{ font-style: normal; }} .badge em.up {{ color: #57f287; }} .badge em.down {{ color: #ed4245; }}
+    td {{ padding: 6px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
+    td.l {{ text-align: left; color: #b5bac1; font-weight: 500; }}
+    tr.grp td {{ padding: 12px 0 4px; border: 0; text-align: left; }}
+    tr.grp span {{ display: inline-block; color: var(--c); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; border-left: 3px solid var(--c); padding-left: 8px; }}
+    .foot {{ margin-top: 12px; font-size: 10.5px; color: #6d7079; display: flex; justify-content: space-between; gap: 16px; }} .foot span:last-child {{ white-space: nowrap; }}
+    </style></head><body><div class="card">
+      <h1>Player stats — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
+      <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(", ".join(agg.keys()))} · damage excludes hits on downed players{note}</div>
+      <table>{head}{body}</table>
+      <div class="foot"><span>Stolen = you finished a player knocked by another team · Lost = your knock finished by another team · KAS = share of games with a kill, an assist or survival</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
+    </div></body></html>"""
+
+
+def build_detail(group, rp_now, rp_prev):
+    start = group[0]["created_at"]
+    end = group[-1]["created_at"] + group[-1]["duration"]
+    embed = {"title": f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
+             "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
+    return embed, render_png(detail_html(group, rp_now, rp_prev), width=820)
+
+
 # ---------------------------------------------------------------- Discord (webhook)
 
 def webhook_post(embed, png, fname="recap.png"):
@@ -588,7 +726,7 @@ def webhook_edit(message_id, embed, png, fname="recap.png"):
 def publish(groups, idx, force=False):
     group = groups[idx]
     key = group[0]["id"]
-    row = DB.execute("SELECT message_id, n_matches FROM sessions WHERE first_match=?", (key,)).fetchone()
+    row = DB.execute("SELECT message_id, n_matches, detail_id FROM sessions WHERE first_match=?", (key,)).fetchone()
     if not force and row and row[1] == len(group):
         return  # rien de nouveau
 
@@ -607,9 +745,17 @@ def publish(groups, idx, force=False):
     embed, png = build_recap(group, prev_group, rp_now, rp_prev)
 
     msg_id = webhook_edit(row[0], embed, png) if row and row[0] else webhook_post(embed, png)
+    # second message "Player stats" juste en dessous, même session
+    detail_id = row[2] if row else None
+    if CONFIG.get("detail", True):
+        try:
+            d_embed, d_png = build_detail(group, rp_now, rp_prev)
+            detail_id = webhook_edit(detail_id, d_embed, d_png, "detail.png") if detail_id else webhook_post(d_embed, d_png, "detail.png")
+        except Exception as e:
+            print("player stats :", repr(e))
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
-    DB.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?,?)",
-               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store)))
+    DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id) VALUES (?,?,?,?,?,?)",
+               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id))
     DB.commit()
     print("recap", "édité" if row else "posté", f"({len(group)} matchs)")
 
