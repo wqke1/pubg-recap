@@ -587,6 +587,18 @@ def detail_html(group, rp_now, rp_prev):
     def tm(sec):
         return f"{int(sec // 3600)}:{int(sec % 3600 // 60):02d}:{int(sec % 60):02d}" if sec >= 3600 else fmt_time(sec)
 
+    def cell_num(c):
+        """Valeur numérique d'une cellule (nombres, '1 234', '1:24:40') pour griser les zéros et repérer le max."""
+        if c is None:
+            return None
+        t = str(c).replace(" ", "")
+        try:
+            if ":" in t:
+                return sum(float(x) * 60 ** i for i, x in enumerate(reversed(t.split(":"))))
+            return float(t)
+        except ValueError:
+            return None
+
     T = lambda s: s["tele"]
     deaths = lambda s: max(1, sum(s["death_order"]))
     tele = lambda f: (lambda s: f(s) if s["tele_games"] else None)
@@ -640,8 +652,14 @@ def detail_html(group, rp_now, rp_prev):
       for title, color, rows in part:
         body += f'<tr class="grp"><td colspan="{len(players) + 1}" style="--c:{color}"><span>{title}</span></td></tr>'
         for label, fn in rows:
-            body += f'<tr><td class="l">{label}</td>' + "".join(
-                f"<td>{v if (v := fn(st)) is not None else '–'}</td>" for _, st in players) + "</tr>"
+            cells = [fn(st) for _, st in players]
+            nums = [cell_num(c) for c in cells]
+            best = max((x for x in nums if x is not None), default=0)
+            body += f'<tr><td class="l">{label}</td>'
+            for c, x in zip(cells, nums):
+                cls = ' class="z"' if x == 0 else ' class="top"' if x is not None and best > 0 and x == best else ""
+                body += f"<td{cls}>{c if c is not None else '–'}</td>"
+            body += "</tr>"
       bodies.append(body)
     tables = "".join(f"<table>{head}{b}</table>" for b in bodies)
     partial = any(st["tele_games"] < st["games"] for _, st in players)
@@ -654,17 +672,20 @@ def detail_html(group, rp_now, rp_prev):
     .cols {{ display: flex; gap: 36px; align-items: flex-start; }} .cols table {{ flex: 1; }}
     h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
     .sub {{ color: #949ba4; font-size: 13px; margin-top: 3px; }}
-    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 16px; }}
-    th {{ text-align: center; padding: 4px 8px 10px; vertical-align: bottom; border-bottom: 2px solid #3a3c42; }}
-    th b {{ display: block; font-size: 19px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
-    th.l {{ text-align: left; color: #949ba4; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }}
-    .badge {{ display: inline-block; margin-top: 4px; font-size: 10.5px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 18px; font-size: 17px; }}
+    th {{ text-align: center; padding: 6px 8px 12px; vertical-align: bottom; border-bottom: 2px solid #4a4d55; }}
+    th b {{ display: block; font-size: 21px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
+    th.l {{ text-align: left; color: #949ba4; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; }}
+    .badge {{ display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }}
     .badge em {{ font-style: normal; }} .badge em.up {{ color: #57f287; }} .badge em.down {{ color: #ed4245; }}
-    td {{ padding: 7px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
-    td.l {{ text-align: left; color: #b5bac1; font-weight: 500; }}
-    tr.grp td {{ padding: 12px 0 4px; border: 0; text-align: left; }}
-    tr.grp span {{ display: inline-block; color: var(--c); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; border-left: 3px solid var(--c); padding-left: 8px; }}
-    .foot {{ margin-top: 12px; font-size: 10.5px; color: #6d7079; display: flex; justify-content: space-between; gap: 16px; }} .foot span:last-child {{ white-space: nowrap; }}
+    td {{ padding: 9px 8px; text-align: center; color: #d3d6db; font-size: 18px; font-weight: 800; border-bottom: 1px solid #2b2d31; border-left: 1px solid #2b2d31; font-variant-numeric: tabular-nums; }}
+    td.top {{ color: #fff; }}
+    td.z {{ color: #5a5e66; font-weight: 600; }}
+    td.l {{ text-align: left; color: #c7cbd1; font-size: 15px; font-weight: 500; border-left: 0; padding-left: 10px; padding-right: 24px; white-space: nowrap; width: 1%; }}
+    tbody tr:nth-child(even) td {{ background: #25272b; }}
+    tr.grp td {{ padding: 20px 0 8px; border: 0; background: transparent !important; text-align: left; }}
+    tr.grp span {{ display: inline-block; color: var(--c); font-size: 13px; text-transform: uppercase; letter-spacing: 1.6px; font-weight: 800; border-left: 4px solid var(--c); padding: 4px 12px 4px 10px; background: color-mix(in srgb, var(--c) 16%, transparent); border-radius: 0 6px 6px 0; }}
+    .foot {{ margin-top: 16px; font-size: 12px; color: #6d7079; display: flex; justify-content: space-between; gap: 16px; }} .foot span:last-child {{ white-space: nowrap; }}
     </style></head><body><div class="card">
       <h1>Player stats — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
       <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(", ".join(agg.keys()))} · damage excludes hits on downed players{note}</div>
