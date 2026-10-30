@@ -48,6 +48,11 @@ for col in ("detail_id INTEGER", "rp_start TEXT"):
         DB.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
     except sqlite3.OperationalError:
         pass  # colonne déjà là
+if not DB.execute("SELECT 1 FROM kv WHERE k='fix_rp_start'").fetchone():
+    # sessions d'avant les relevés RP : point de départ figé à tort sur un relevé postérieur → on le retire
+    DB.execute("UPDATE sessions SET rp_start=NULL WHERE started_at < 1793450000")  # 2026-10-30 12h00 Paris
+    DB.execute("INSERT INTO kv VALUES ('fix_rp_start', '1')")
+    DB.commit()
 
 MAPS = {
     "Baltic_Main": "Erangel", "Desert_Main": "Miramar", "Savage_Main": "Sanhok", "DihorOtok_Main": "Vikendi",
@@ -717,7 +722,8 @@ def publish(groups, idx, force=False):
     # Sans snapshot (ancienne session, bot à l'arrêt), on retombe sur le RP de fin de la session précédente.
     rp_prev = json.loads(row[3]) if row and row[3] else None
     if rp_prev is None:
-        rp_prev = dict(rp_snapshot_load())
+        # le relevé ne vaut que pour une session nouvelle : pour une session déjà postée il serait postérieur à ses parties
+        rp_prev = dict(rp_snapshot_load()) if row is None else {}
         for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
                                      (key, group[0]["created_at"])):
             for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
