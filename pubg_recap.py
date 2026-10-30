@@ -43,10 +43,11 @@ CREATE TABLE IF NOT EXISTS sessions (first_match TEXT PRIMARY KEY, started_at IN
 CREATE TABLE IF NOT EXISTS kv       (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS reports  (id TEXT PRIMARY KEY);
 """)
-try:
-    DB.execute("ALTER TABLE sessions ADD COLUMN detail_id INTEGER")
-except sqlite3.OperationalError:
-    pass  # colonne déjà là
+for col in ("detail_id INTEGER", "rp_start TEXT"):
+    try:
+        DB.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
+    except sqlite3.OperationalError:
+        pass  # colonne déjà là
 
 MAPS = {
     "Baltic_Main": "Erangel", "Desert_Main": "Miramar", "Savage_Main": "Sanhok", "DihorOtok_Main": "Vikendi",
@@ -398,7 +399,7 @@ def esc(t):
     return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def recap_html(group, prev_group, rp_now, rp_prev):
+def recap_html(group, rp_now, rp_prev):
     agg_all = aggregate(group)
     n = len(group)
     agg, randoms = split_randoms(agg_all, n)
@@ -470,21 +471,6 @@ def recap_html(group, prev_group, rp_now, rp_prev):
               ("💀", "Premier mort", first_death[0], f"{first_death[1]['first_death']}/{first_death[1]['games']}")]
     titles_html = "".join(f'<div class="title"><span class="ico">{i}</span><div><i>{t}</i><b>{esc(w)}</b><s>{v}</s></div></div>' for i, t, w, v in titles)
 
-    prev_html = ""
-    if prev_group:
-        pa, _ = split_randoms(aggregate(prev_group), len(prev_group))
-        common = [k for k in agg if k in pa]
-        if common:
-            def avg(a, key):
-                return sum(a[k][key] / a[k]["games"] for k in common) / len(common)
-            dmg = avg(agg, "damage") / avg(pa, "damage") - 1
-            place = sum(m["rank"] for m in group) / n - sum(m["rank"] for m in prev_group) / len(prev_group)
-            kills = avg(agg, "kills") - avg(pa, "kills")
-            def tr(v, good_if_positive=True, fmt="{:+.1f}"):
-                good = (v >= 0) == good_if_positive
-                return f'<span class="{"up" if good else "down"}">{fmt.format(v)}</span>'
-            prev_html = f'<div class="prev">vs session précédente &nbsp; dégâts {tr(dmg, True, "{:+.0%}")} · placement {tr(place, False)} · kills/p {tr(kills)}</div>'
-
     games_html = ""
     for i, m in enumerate(group, 1):
         k = sum(p["kills"] for p in m["players"])
@@ -538,8 +524,6 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     .title i {{ display: block; font-style: normal; font-size: 11px; color: #949ba4; text-transform: uppercase; }}
     .title b {{ display: block; font-size: 15px; color: #fff; }}
     .title s {{ display: block; text-decoration: none; font-size: 12px; color: #b5bac1; }}
-    .prev {{ margin-top: 18px; font-size: 14px; color: #949ba4; }}
-    .prev .up {{ color: #57f287; font-weight: 700; }} .prev .down {{ color: #ed4245; font-weight: 700; }}
     .games {{ display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: column; gap: 6px 12px; }}
     .gt {{ color: #6d7079; font-size: 12px; width: 40px; }}
     .game {{ display: flex; align-items: center; gap: 8px; background: #26282c; border-radius: 8px; padding: 7px 10px; font-size: 13px; border-left: 3px solid transparent; }}
@@ -566,7 +550,6 @@ def recap_html(group, prev_group, rp_now, rp_prev):
       <div class="rows">{rows}</div>
       <h2>Titres</h2>
       <div class="titles">{titles_html}</div>
-      {prev_html}
       <h2>Parties</h2>
       <div class="games" style="grid-template-rows: repeat({(n + 1) // 2}, auto)">{games_html}</div>
       <div class="foot"><span></span><span>mis à jour {datetime.now():%Hh%M}</span></div>
@@ -585,13 +568,13 @@ def render_png(html, width=960):
     return png
 
 
-def build_recap(group, prev_group, rp_now, rp_prev):
+def build_recap(group, rp_now, rp_prev):
     """Retourne (embed, png_bytes)."""
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
     embed = {"title": f"🐔  Session ranked — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
              "color": 0xF2A900, "image": {"url": "attachment://recap.png"}}
-    return embed, render_png(recap_html(group, prev_group, rp_now, rp_prev))
+    return embed, render_png(recap_html(group, rp_now, rp_prev))
 
 
 def detail_html(group, rp_now, rp_prev):
@@ -726,7 +709,7 @@ def webhook_edit(message_id, embed, png, fname="recap.png"):
 def publish(groups, idx, force=False):
     group = groups[idx]
     key = group[0]["id"]
-    row = DB.execute("SELECT message_id, n_matches, detail_id FROM sessions WHERE first_match=?", (key,)).fetchone()
+    row = DB.execute("SELECT message_id, n_matches, detail_id, rp_start FROM sessions WHERE first_match=?", (key,)).fetchone()
     if not force and row and row[1] == len(group):
         return  # rien de nouveau
 
@@ -735,14 +718,16 @@ def publish(groups, idx, force=False):
         for p in m["players"]:
             accounts.setdefault(p["account"], p["name"])
     rp_now = [(acc, raw, ranked_stats(acc)) for acc, raw in accounts.items()]
-    # dernier RP connu de chaque compte, toutes sessions précédentes confondues
-    rp_prev = {}
-    for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
-                                 (key, group[0]["created_at"])):
-        for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
-            rp_prev.setdefault(acc, rp)
-    prev_group = next((g for g in reversed(groups[:idx]) if lineup(g[0]) == lineup(group[0])), None)
-    embed, png = build_recap(group, prev_group, rp_now, rp_prev)
+    # RP de départ de la session : le dernier snapshot pris AVANT la première partie (figé au premier post).
+    # Sans snapshot (ancienne session, bot à l'arrêt), on retombe sur le RP de fin de la session précédente.
+    rp_prev = json.loads(row[3]) if row and row[3] else None
+    if rp_prev is None:
+        rp_prev = dict(rp_snapshot_load())
+        for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
+                                     (key, group[0]["created_at"])):
+            for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
+                rp_prev.setdefault(acc, rp)
+    embed, png = build_recap(group, rp_now, rp_prev)
 
     msg_id = webhook_edit(row[0], embed, png) if row and row[0] else webhook_post(embed, png)
     # second message "Player stats" juste en dessous, même session
@@ -754,8 +739,8 @@ def publish(groups, idx, force=False):
         except Exception as e:
             print("player stats :", repr(e))
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
-    DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id) VALUES (?,?,?,?,?,?)",
-               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id))
+    DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id, rp_start) VALUES (?,?,?,?,?,?,?)",
+               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id, json.dumps(rp_prev)))
     DB.commit()
     print("recap", "édité" if row else "posté", f"({len(group)} matchs)")
 
@@ -899,6 +884,23 @@ def pubg_report(test=0):
     print(f"pubg.report : {len(clips)} clip(s) posté(s)")
 
 
+def rp_snapshot_load():
+    row = DB.execute("SELECT v FROM kv WHERE k='rp_last'").fetchone()
+    return json.loads(row[0]) if row else {}
+
+
+def rp_snapshot():
+    """RP courant de chaque compte du cercle, relevé à chaque passage : sert de point de départ
+    (RP avant la première partie) quand une nouvelle session démarre."""
+    snap = rp_snapshot_load()
+    for acc in circle_accounts():
+        r = ranked_stats(acc)
+        if r:
+            snap[acc] = r["rp"]
+    DB.execute("INSERT OR REPLACE INTO kv VALUES ('rp_last', ?)", (json.dumps(snap),))
+    DB.commit()
+
+
 def run_once(force=False):
     poll()
     groups = sessions()
@@ -913,6 +915,7 @@ def run_once(force=False):
         todays = [len(groups) - 1]  # rien aujourd'hui → dernière session connue
     for i in todays:
         publish(groups, i, force=force)
+    rp_snapshot()
 
 
 if __name__ == "__main__":
