@@ -560,10 +560,10 @@ def build_recap(group, rp_now, rp_prev):
     return embed, render_png(recap_html(group, rp_now, rp_prev))
 
 
-def detail_html(group, rp_now, rp_prev, part=1):
+def detail_html(group, rp_now, rp_prev):
     """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur.
-    Deux images (part 1 : Combat / Damage / Damage taken, part 2 : Survival / Utility / Movement),
-    sinon l'image est trop haute et Discord la réduit jusqu'à l'illisible."""
+    Une seule image, deux tableaux côte à côte (Combat / Damage / Damage taken, puis Survival / Utility / Movement) :
+    une image en hauteur serait réduite par Discord jusqu'à l'illisible."""
     agg_all = aggregate(group)
     n = len(group)
     agg, randoms = split_randoms(agg_all, n)
@@ -629,19 +629,24 @@ def detail_html(group, rp_now, rp_prev, part=1):
         games = "" if st["games"] == n else f' <small>{st["games"]}/{n}</small>'
         head += f'<th><b>{esc(name)}{games}</b>{badge}</th>'
     head += "</tr>"
-    body = ""
-    for title, color, rows in (SECTIONS[:3] if part == 1 else SECTIONS[3:]):
+    bodies = []
+    for part in (SECTIONS[:3], SECTIONS[3:]):
+      body = ""
+      for title, color, rows in part:
         body += f'<tr class="grp"><td colspan="{len(players) + 1}" style="--c:{color}"><span>{title}</span></td></tr>'
         for label, fn in rows:
             body += f'<tr><td class="l">{label}</td>' + "".join(
                 f"<td>{v if (v := fn(st)) is not None else '–'}</td>" for _, st in players) + "</tr>"
+      bodies.append(body)
+    tables = "".join(f"<table>{head}{b}</table>" for b in bodies)
     partial = any(st["tele_games"] < st["games"] for _, st in players)
     note = " · telemetry partial on older matches" if partial else ""
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 820px; }}
+    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 1640px; }}
     .card {{ padding: 24px 28px 16px; border-left: 6px solid #5865f2; }}
+    .cols {{ display: flex; gap: 36px; align-items: flex-start; }} .cols table {{ flex: 1; }}
     h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
     .sub {{ color: #949ba4; font-size: 13px; margin-top: 3px; }}
     table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 16px; }}
@@ -656,9 +661,9 @@ def detail_html(group, rp_now, rp_prev, part=1):
     tr.grp span {{ display: inline-block; color: var(--c); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; border-left: 3px solid var(--c); padding-left: 8px; }}
     .foot {{ margin-top: 12px; font-size: 10.5px; color: #6d7079; display: flex; justify-content: space-between; gap: 16px; }} .foot span:last-child {{ white-space: nowrap; }}
     </style></head><body><div class="card">
-      <h1>Player stats {part}/2 — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
+      <h1>Player stats — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
       <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(", ".join(agg.keys()))} · damage excludes hits on downed players{note}</div>
-      <table>{head}{body}</table>
+      <div class="cols">{tables}</div>
       <div class="foot"><span>Stolen = you finished a player knocked by another team · Lost = your knock finished by another team · KAS = share of games with a kill, an assist or survival</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
     </div></body></html>"""
 
@@ -667,10 +672,8 @@ def build_detail(group, rp_now, rp_prev):
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
     title = f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}"
-    embeds = [{"title": title, "color": 0x5865F2, "image": {"url": "attachment://detail1.png"}},
-              {"color": 0x5865F2, "image": {"url": "attachment://detail2.png"}}]
-    pngs = [(f"detail{i}.png", render_png(detail_html(group, rp_now, rp_prev, part=i), width=820)) for i in (1, 2)]
-    return embeds, pngs
+    embed = {"title": title, "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
+    return [embed], [("detail.png", render_png(detail_html(group, rp_now, rp_prev), width=1640))]
 
 
 # ---------------------------------------------------------------- Discord (webhook)
