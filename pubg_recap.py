@@ -567,7 +567,7 @@ def build_recap(group, rp_now, rp_prev):
 
 def detail_html(group, rp_now, rp_prev):
     """Second message : toutes les stats façon Twire, une ligne par stat, une colonne par joueur.
-    Une seule image, deux tableaux côte à côte (Combat / Damage / Damage taken, puis Survival / Utility / Movement) :
+    Une seule image, trois tableaux côte à côte (Combat+Damage, Damage taken+Survival, Utility+Movement) :
     une image en hauteur serait réduite par Discord jusqu'à l'illisible."""
     agg_all = aggregate(group)
     n = len(group)
@@ -635,7 +635,7 @@ def detail_html(group, rp_now, rp_prev):
         head += f'<th><b>{esc(name)}{games}</b>{badge}</th>'
     head += "</tr>"
     bodies = []
-    for part in (SECTIONS[:3], SECTIONS[3:]):
+    for part in (SECTIONS[:2], SECTIONS[2:4], SECTIONS[4:]):
       body = ""
       for title, color, rows in part:
         body += f'<tr class="grp"><td colspan="{len(players) + 1}" style="--c:{color}"><span>{title}</span></td></tr>'
@@ -649,18 +649,18 @@ def detail_html(group, rp_now, rp_prev):
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 1640px; }}
+    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 2000px; }}
     .card {{ padding: 24px 28px 16px; border-left: 6px solid #5865f2; }}
     .cols {{ display: flex; gap: 36px; align-items: flex-start; }} .cols table {{ flex: 1; }}
     h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
     .sub {{ color: #949ba4; font-size: 13px; margin-top: 3px; }}
-    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 16px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 18px; }}
     th {{ text-align: center; padding: 4px 8px 10px; vertical-align: bottom; border-bottom: 2px solid #3a3c42; }}
-    th b {{ display: block; font-size: 19px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
+    th b {{ display: block; font-size: 21px; font-weight: 800; color: #fff; }} th small {{ font-size: 11px; color: #949ba4; font-weight: 600; }}
     th.l {{ text-align: left; color: #949ba4; font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; }}
     .badge {{ display: inline-block; margin-top: 4px; font-size: 10.5px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }}
     .badge em {{ font-style: normal; }} .badge em.up {{ color: #57f287; }} .badge em.down {{ color: #ed4245; }}
-    td {{ padding: 7px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
+    td {{ padding: 8px 8px; text-align: center; color: #fff; font-weight: 700; border-bottom: 1px solid #26282c; font-variant-numeric: tabular-nums; }}
     td.l {{ text-align: left; color: #b5bac1; font-weight: 500; }}
     tr.grp td {{ padding: 12px 0 4px; border: 0; text-align: left; }}
     tr.grp span {{ display: inline-block; color: var(--c); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; font-weight: 800; border-left: 3px solid var(--c); padding-left: 8px; }}
@@ -678,7 +678,7 @@ def build_detail(group, rp_now, rp_prev):
     end = group[-1]["created_at"] + group[-1]["duration"]
     title = f"📊  Player stats — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}"
     embed = {"title": title, "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
-    return [embed], [("detail.png", render_png(detail_html(group, rp_now, rp_prev), width=1640))]
+    return [embed], [("detail.png", render_png(detail_html(group, rp_now, rp_prev), width=2000))]
 
 
 # ---------------------------------------------------------------- Discord (webhook)
