@@ -2,9 +2,11 @@
 
 Un run GitHub tourne en continu (boucle de ~5h40, puis se relance lui-même via le secret `GH_PAT`). Toutes les 5 min, il :
 1. récupère les nouveaux matchs ranked du cercle ;
-2. poste le recap dès la première game et l'édite après chaque game (même lineup = même message, toute la journée) ;
+2. poste le recap dès la première game et l'édite après chaque game (même lineup = même message, toute la journée);
 3. poste les nouveaux clips pubg.report ;
 4. sauvegarde `recap.db` dans le repo.
+
+Chaque match stocke aussi ses stats télémétrie (dégâts par type d'arme, subis, kills volés/perdus, grenades…) pour un futur affichage détaillé ; `--backfill` les récupère sur les matchs des 7 derniers jours.
 
 ## Mise en place (une fois)
 

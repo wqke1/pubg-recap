@@ -105,15 +105,130 @@ def parse_match(d):
             "duration": a["duration"],
             "map": MAPS.get(a["mapName"], a["mapName"]),
             "rank": r["attributes"]["stats"]["rank"],
+            "telemetry": next((i["attributes"]["URL"] for i in d["included"] if i["type"] == "asset"), None),
             "players": [{
                 "name": s["name"],
                 "account": s["playerId"],
                 "kills": s["kills"], "assists": s["assists"], "damage": s["damageDealt"],
                 "hs": s["headshotKills"], "survived": s["timeSurvived"], "revives": s["revives"],
                 "longest": s["longestKill"], "alive": s["deathType"] == "alive",
+                "dbnos": s["DBNOs"], "heals": s["heals"], "boosts": s["boosts"], "vehicles": s["vehicleDestroys"],
+                "walk": s["walkDistance"], "ride": s["rideDistance"], "swim": s["swimDistance"],
             } for s in members],
         }
     return None
+
+
+# ---------------------------------------------------------------- Télémétrie (stats détaillées par match)
+
+WEAPON_CLASS = {
+    "AR": {"AK47", "M16A4", "M416", "HK416", "SCAR-L", "G36C", "QBZ95", "BerylM762", "Groza", "AUG", "Mk47Mutant", "K2", "ACE32", "FAMASG2", "FAMAS"},
+    "DMR": {"Mini14", "SKS", "Mk14", "SLR", "QBU88", "VSS", "Mk12", "Dragunov"},
+    "SR": {"Kar98k", "M24", "AWM", "MosinNagant", "Win1894", "L6"},
+    "SMG": {"UMP", "Vector", "UZI", "Thompson", "MP5K", "BizonPP19", "P90", "JS9", "MP9"},
+    "LMG": {"DP28", "M249", "MG3"},
+    "SG": {"Saiga12", "Berreta686", "Winchester", "DP12", "O12"},
+}
+
+
+def weapon_class(causer):
+    w = causer.replace("Weap", "").replace("_C", "")
+    for cls, names in WEAPON_CLASS.items():
+        if w in names:
+            return cls
+    return "other"
+
+
+TELE_KEYS = ("dmg_ar", "dmg_dmr", "dmg_sr", "dmg_smg", "dmg_lmg", "dmg_sg", "dmg_other", "dmg_gren", "dmg_molo",
+             "taken", "taken_zone", "stolen", "lost", "knocked", "revived", "gren", "smoke", "flash", "molo")
+
+
+def telemetry_stats(url, accounts):
+    """Stats télémétrie pour les comptes donnés (set d'account ids d'un même roster). Retourne {account: {...}}."""
+    r = requests.get(url, headers={"Accept-Encoding": "gzip"}, timeout=120)
+    r.raise_for_status()
+    events = r.json()
+    st = {a: dict.fromkeys(TELE_KEYS, 0) for a in accounts}
+
+    def acc(c):
+        return (c or {}).get("accountId")
+
+    for ev in events:
+        t = ev.get("_T")
+        if t == "LogPlayerTakeDamage":
+            a, v, dmg = acc(ev.get("attacker")), acc(ev.get("victim")), ev.get("damage", 0)
+            cat = ev.get("damageTypeCategory", "")
+            if a in st and v not in st and cat != "Damage_Groggy":  # on exclut les dégâts sur un joueur déjà au sol
+                if cat == "Damage_Gun":
+                    st[a]["dmg_" + weapon_class(ev.get("damageCauserName", "")).lower()] += dmg
+                elif cat == "Damage_Explosion_Grenade":
+                    st[a]["dmg_gren"] += dmg
+                elif cat == "Damage_Molotov":
+                    st[a]["dmg_molo"] += dmg
+            if v in st:
+                if cat == "Damage_BlueZone":
+                    st[v]["taken_zone"] += dmg
+                elif a and a not in st:
+                    st[v]["taken"] += dmg
+        elif t == "LogPlayerMakeGroggy":
+            v = acc(ev.get("victim"))
+            if v in st:
+                st[v]["knocked"] += 1
+        elif t == "LogPlayerKillV2":
+            f, m = acc(ev.get("finisher")), acc(ev.get("dBNOMaker"))
+            if f in st and m in st and f != m:
+                st[f]["stolen"] += 1
+                st[m]["lost"] += 1
+        elif t == "LogPlayerRevive":
+            v = acc(ev.get("victim"))
+            if v in st:
+                st[v]["revived"] += 1
+        elif t == "LogPlayerUseThrowable":
+            a = acc(ev.get("attacker"))
+            if a in st:
+                item = (ev.get("weapon") or {}).get("itemId", "")
+                key = "gren" if "Grenade" in item else "smoke" if "Smoke" in item else "flash" if "Flash" in item else "molo" if "Molotov" in item else None
+                if key:
+                    st[a][key] += 1
+    return {a: {k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()} for a, d in st.items()}
+
+
+def enrich_telemetry(m):
+    """Ajoute p["tele"] à chaque joueur du match (si l'URL de télémétrie est connue)."""
+    if not m.get("telemetry"):
+        return False
+    try:
+        st = telemetry_stats(m["telemetry"], {p["account"] for p in m["players"]})
+    except Exception as e:
+        print("  télémétrie :", repr(e))
+        return False
+    for p in m["players"]:
+        p["tele"] = st.get(p["account"])
+    return True
+
+
+def backfill_telemetry(days=7):
+    """Complète la télémétrie des matchs récents stockés sans (une fois)."""
+    since = time.time() - days * 86400
+    rows = [(i, json.loads(d)) for i, d in DB.execute("SELECT id, data FROM matches WHERE created_at > ?", (since,))]
+    todo = [(i, m) for i, m in rows if any("tele" not in p for p in m["players"])]
+    print(f"télémétrie : {len(todo)} matchs à compléter")
+    for k, (mid, m) in enumerate(todo, 1):
+        if not m.get("telemetry"):
+            try:
+                d = api(f"/matches/{mid}")
+                m["telemetry"] = next((i["attributes"]["URL"] for i in d["included"] if i["type"] == "asset"), None)
+                parts = {i["attributes"]["stats"]["playerId"]: i["attributes"]["stats"] for i in d["included"] if i["type"] == "participant"}
+                for p in m["players"]:
+                    s = parts.get(p["account"], {})
+                    p.setdefault("dbnos", s.get("DBNOs", p["kills"])); p.setdefault("heals", s.get("heals", 0)); p.setdefault("boosts", s.get("boosts", 0))
+                    p.setdefault("vehicles", s.get("vehicleDestroys", 0)); p.setdefault("walk", s.get("walkDistance", 0)); p.setdefault("ride", s.get("rideDistance", 0)); p.setdefault("swim", s.get("swimDistance", 0))
+            except Exception as e:
+                print("  ", mid[:8], repr(e)); continue
+        if enrich_telemetry(m):
+            DB.execute("UPDATE matches SET data=? WHERE id=?", (json.dumps(m), mid))
+            DB.commit()
+            print(f"  {k}/{len(todo)} ok")
 
 
 def poll():
@@ -123,6 +238,7 @@ def poll():
         m = parse_match(api(f"/matches/{mid}"))  # /matches ne compte pas dans le rate limit
         print(f"  {i}/{len(ids)}", "ranked ✓" if m else "ignoré")
         if m:
+            enrich_telemetry(m)
             DB.execute("INSERT OR IGNORE INTO matches VALUES (?,?,?,?)",
                        (m["id"], m["created_at"], m["duration"], json.dumps(m)))
         DB.execute("INSERT OR IGNORE INTO seen VALUES (?)", (mid,))
@@ -174,19 +290,31 @@ def sessions():
 
 def aggregate(group):
     agg = defaultdict(lambda: {"games": 0, "kills": 0, "assists": 0, "damage": 0.0, "hs": 0,
-                               "survived": 0, "revives": 0, "longest": 0.0, "first_death": 0, "account": None})
+                               "survived": 0, "revives": 0, "longest": 0.0, "first_death": 0, "account": None,
+                               "dbnos": 0, "heals": 0, "boosts": 0, "vehicles": 0, "dist": 0.0,
+                               "death_order": [0, 0, 0, 0], "tele_games": 0, "tele": dict.fromkeys(TELE_KEYS, 0)})
     for m in group:
-        dead = [p for p in m["players"] if not p["alive"]]
-        first = alias(min(dead, key=lambda p: p["survived"])["name"]) if dead else None
+        dead = sorted((p for p in m["players"] if not p["alive"]), key=lambda p: p["survived"])
+        first = alias(dead[0]["name"]) if dead else None
+        order = {p["account"]: i for i, p in enumerate(dead[:4])}
         for p in m["players"]:
             s = agg[alias(p["name"])]
             s["games"] += 1
             for k in ("kills", "assists", "damage", "hs", "survived", "revives"):
                 s[k] += p[k]
+            for k in ("dbnos", "heals", "boosts", "vehicles"):
+                s[k] += p.get(k, 0)
+            s["dist"] += p.get("walk", 0) + p.get("ride", 0) + p.get("swim", 0)
             s["longest"] = max(s["longest"], p["longest"])
             s["account"] = p["account"]
             if alias(p["name"]) == first:
                 s["first_death"] += 1
+            if p["account"] in order:
+                s["death_order"][order[p["account"]]] += 1
+            if p.get("tele"):
+                s["tele_games"] += 1
+                for k in TELE_KEYS:
+                    s["tele"][k] += p["tele"].get(k, 0)
     return dict(sorted(agg.items(), key=lambda kv: -kv[1]["games"]))
 
 
@@ -411,12 +539,12 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     </div></body></html>"""
 
 
-def render_png(html):
+def render_png(html, width=960):
     """HTML → PNG via Chromium headless (Playwright)."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         b = p.chromium.launch()
-        pg = b.new_page(viewport={"width": 960, "height": 600}, device_scale_factor=2)
+        pg = b.new_page(viewport={"width": width, "height": 200}, device_scale_factor=2)
         pg.set_content(html, wait_until="networkidle")
         png = pg.screenshot(full_page=True)
         b.close()
@@ -434,20 +562,20 @@ def build_recap(group, prev_group, rp_now, rp_prev):
 
 # ---------------------------------------------------------------- Discord (webhook)
 
-def webhook_post(embed, png):
+def webhook_post(embed, png, fname="recap.png"):
     payload = {"embeds": [embed], "attachments": []}
     r = requests.post(WEBHOOK, params={"wait": "true"}, data={"payload_json": json.dumps(payload)},
-                      files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
+                      files={"files[0]": (fname, png, "image/png")}, timeout=60)
     r.raise_for_status()
     return r.json()["id"]
 
 
-def webhook_edit(message_id, embed, png):
+def webhook_edit(message_id, embed, png, fname="recap.png"):
     payload = {"embeds": [embed], "attachments": []}  # attachments vide = on remplace l'ancienne image
     r = requests.patch(f"{WEBHOOK}/messages/{message_id}", data={"payload_json": json.dumps(payload)},
-                       files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
+                       files={"files[0]": (fname, png, "image/png")}, timeout=60)
     if r.status_code == 404:  # message supprimé à la main → on reposte
-        return webhook_post(embed, png)
+        return webhook_post(embed, png, fname)
     r.raise_for_status()
     return message_id
 
@@ -637,7 +765,9 @@ def run_once(force=False):
 
 
 if __name__ == "__main__":
-    if "--reports-test" in sys.argv:
+    if "--backfill" in sys.argv:
+        backfill_telemetry()
+    elif "--reports-test" in sys.argv:
         i = sys.argv.index("--reports-test")
         n = int(sys.argv[i + 1]) if len(sys.argv) > i + 1 and sys.argv[i + 1].isdigit() else 3
         pubg_report(test=n)
