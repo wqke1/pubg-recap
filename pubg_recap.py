@@ -43,10 +43,6 @@ CREATE TABLE IF NOT EXISTS sessions (first_match TEXT PRIMARY KEY, started_at IN
 CREATE TABLE IF NOT EXISTS kv       (k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS reports  (id TEXT PRIMARY KEY);
 """)
-try:
-    DB.execute("ALTER TABLE sessions ADD COLUMN detail_id INTEGER")
-except sqlite3.OperationalError:
-    pass  # colonne déjà là
 
 MAPS = {
     "Baltic_Main": "Erangel", "Desert_Main": "Miramar", "Savage_Main": "Sanhok", "DihorOtok_Main": "Vikendi",
@@ -109,130 +105,15 @@ def parse_match(d):
             "duration": a["duration"],
             "map": MAPS.get(a["mapName"], a["mapName"]),
             "rank": r["attributes"]["stats"]["rank"],
-            "telemetry": next((i["attributes"]["URL"] for i in d["included"] if i["type"] == "asset"), None),
             "players": [{
                 "name": s["name"],
                 "account": s["playerId"],
                 "kills": s["kills"], "assists": s["assists"], "damage": s["damageDealt"],
                 "hs": s["headshotKills"], "survived": s["timeSurvived"], "revives": s["revives"],
                 "longest": s["longestKill"], "alive": s["deathType"] == "alive",
-                "dbnos": s["DBNOs"], "heals": s["heals"], "boosts": s["boosts"], "vehicles": s["vehicleDestroys"],
-                "walk": s["walkDistance"], "ride": s["rideDistance"], "swim": s["swimDistance"],
             } for s in members],
         }
     return None
-
-
-# ---------------------------------------------------------------- Télémétrie (stats détaillées par match)
-
-WEAPON_CLASS = {
-    "AR": {"AK47", "M16A4", "M416", "HK416", "SCAR-L", "G36C", "QBZ95", "BerylM762", "Groza", "AUG", "Mk47Mutant", "K2", "ACE32", "FAMASG2", "FAMAS"},
-    "DMR": {"Mini14", "SKS", "Mk14", "SLR", "QBU88", "VSS", "Mk12", "Dragunov"},
-    "SR": {"Kar98k", "M24", "AWM", "MosinNagant", "Win1894", "L6"},
-    "SMG": {"UMP", "Vector", "UZI", "Thompson", "MP5K", "BizonPP19", "P90", "JS9", "MP9"},
-    "LMG": {"DP28", "M249", "MG3"},
-    "SG": {"Saiga12", "Berreta686", "Winchester", "DP12", "O12"},
-}
-
-
-def weapon_class(causer):
-    w = causer.replace("Weap", "").replace("_C", "")
-    for cls, names in WEAPON_CLASS.items():
-        if w in names:
-            return cls
-    return "other"
-
-
-TELE_KEYS = ("dmg_ar", "dmg_dmr", "dmg_sr", "dmg_smg", "dmg_lmg", "dmg_sg", "dmg_other", "dmg_gren", "dmg_molo",
-             "taken", "taken_zone", "stolen", "lost", "knocked", "revived", "gren", "smoke", "flash", "molo")
-
-
-def telemetry_stats(url, accounts):
-    """Stats télémétrie pour les comptes donnés (set d'account ids d'un même roster). Retourne {account: {...}}."""
-    r = requests.get(url, headers={"Accept-Encoding": "gzip"}, timeout=120)
-    r.raise_for_status()
-    events = r.json()
-    st = {a: dict.fromkeys(TELE_KEYS, 0) for a in accounts}
-
-    def acc(c):
-        return (c or {}).get("accountId")
-
-    for ev in events:
-        t = ev.get("_T")
-        if t == "LogPlayerTakeDamage":
-            a, v, dmg = acc(ev.get("attacker")), acc(ev.get("victim")), ev.get("damage", 0)
-            cat = ev.get("damageTypeCategory", "")
-            if a in st and v not in st and cat != "Damage_Groggy":  # on exclut les dégâts sur un joueur déjà au sol
-                if cat == "Damage_Gun":
-                    st[a]["dmg_" + weapon_class(ev.get("damageCauserName", "")).lower()] += dmg
-                elif cat == "Damage_Explosion_Grenade":
-                    st[a]["dmg_gren"] += dmg
-                elif cat == "Damage_Molotov":
-                    st[a]["dmg_molo"] += dmg
-            if v in st:
-                if cat == "Damage_BlueZone":
-                    st[v]["taken_zone"] += dmg
-                elif a and a not in st:
-                    st[v]["taken"] += dmg
-        elif t == "LogPlayerMakeGroggy":
-            v = acc(ev.get("victim"))
-            if v in st:
-                st[v]["knocked"] += 1
-        elif t == "LogPlayerKillV2":
-            f, m = acc(ev.get("finisher")), acc(ev.get("dBNOMaker"))
-            if f in st and m in st and f != m:
-                st[f]["stolen"] += 1
-                st[m]["lost"] += 1
-        elif t == "LogPlayerRevive":
-            v = acc(ev.get("victim"))
-            if v in st:
-                st[v]["revived"] += 1
-        elif t == "LogPlayerUseThrowable":
-            a = acc(ev.get("attacker"))
-            if a in st:
-                item = (ev.get("weapon") or {}).get("itemId", "")
-                key = "gren" if "Grenade" in item else "smoke" if "Smoke" in item else "flash" if "Flash" in item else "molo" if "Molotov" in item else None
-                if key:
-                    st[a][key] += 1
-    return {a: {k: round(v, 1) if isinstance(v, float) else v for k, v in d.items()} for a, d in st.items()}
-
-
-def enrich_telemetry(m):
-    """Ajoute p["tele"] à chaque joueur du match (si l'URL de télémétrie est connue)."""
-    if not m.get("telemetry"):
-        return False
-    try:
-        st = telemetry_stats(m["telemetry"], {p["account"] for p in m["players"]})
-    except Exception as e:
-        print("  télémétrie :", repr(e))
-        return False
-    for p in m["players"]:
-        p["tele"] = st.get(p["account"])
-    return True
-
-
-def backfill_telemetry(days=7):
-    """Complète la télémétrie des matchs récents stockés sans (une fois)."""
-    since = time.time() - days * 86400
-    rows = [(i, json.loads(d)) for i, d in DB.execute("SELECT id, data FROM matches WHERE created_at > ?", (since,))]
-    todo = [(i, m) for i, m in rows if any("tele" not in p for p in m["players"])]
-    print(f"télémétrie : {len(todo)} matchs à compléter")
-    for k, (mid, m) in enumerate(todo, 1):
-        if not m.get("telemetry"):
-            try:
-                d = api(f"/matches/{mid}")
-                m["telemetry"] = next((i["attributes"]["URL"] for i in d["included"] if i["type"] == "asset"), None)
-                parts = {i["attributes"]["stats"]["playerId"]: i["attributes"]["stats"] for i in d["included"] if i["type"] == "participant"}
-                for p in m["players"]:
-                    s = parts.get(p["account"], {})
-                    p.setdefault("dbnos", s.get("DBNOs", p["kills"])); p.setdefault("heals", s.get("heals", 0)); p.setdefault("boosts", s.get("boosts", 0))
-                    p.setdefault("vehicles", s.get("vehicleDestroys", 0)); p.setdefault("walk", s.get("walkDistance", 0)); p.setdefault("ride", s.get("rideDistance", 0)); p.setdefault("swim", s.get("swimDistance", 0))
-            except Exception as e:
-                print("  ", mid[:8], repr(e)); continue
-        if enrich_telemetry(m):
-            DB.execute("UPDATE matches SET data=? WHERE id=?", (json.dumps(m), mid))
-            DB.commit()
-            print(f"  {k}/{len(todo)} ok")
 
 
 def poll():
@@ -242,7 +123,6 @@ def poll():
         m = parse_match(api(f"/matches/{mid}"))  # /matches ne compte pas dans le rate limit
         print(f"  {i}/{len(ids)}", "ranked ✓" if m else "ignoré")
         if m:
-            enrich_telemetry(m)
             DB.execute("INSERT OR IGNORE INTO matches VALUES (?,?,?,?)",
                        (m["id"], m["created_at"], m["duration"], json.dumps(m)))
         DB.execute("INSERT OR IGNORE INTO seen VALUES (?)", (mid,))
@@ -294,31 +174,19 @@ def sessions():
 
 def aggregate(group):
     agg = defaultdict(lambda: {"games": 0, "kills": 0, "assists": 0, "damage": 0.0, "hs": 0,
-                               "survived": 0, "revives": 0, "longest": 0.0, "first_death": 0, "account": None,
-                               "dbnos": 0, "heals": 0, "boosts": 0, "vehicles": 0, "dist": 0.0,
-                               "death_order": [0, 0, 0, 0], "tele_games": 0, "tele": dict.fromkeys(TELE_KEYS, 0)})
+                               "survived": 0, "revives": 0, "longest": 0.0, "first_death": 0, "account": None})
     for m in group:
-        dead = sorted((p for p in m["players"] if not p["alive"]), key=lambda p: p["survived"])
-        first = alias(dead[0]["name"]) if dead else None
-        order = {p["account"]: i for i, p in enumerate(dead[:4])}
+        dead = [p for p in m["players"] if not p["alive"]]
+        first = alias(min(dead, key=lambda p: p["survived"])["name"]) if dead else None
         for p in m["players"]:
             s = agg[alias(p["name"])]
             s["games"] += 1
             for k in ("kills", "assists", "damage", "hs", "survived", "revives"):
                 s[k] += p[k]
-            for k in ("dbnos", "heals", "boosts", "vehicles"):
-                s[k] += p.get(k, 0)
-            s["dist"] += p.get("walk", 0) + p.get("ride", 0) + p.get("swim", 0)
             s["longest"] = max(s["longest"], p["longest"])
             s["account"] = p["account"]
             if alias(p["name"]) == first:
                 s["first_death"] += 1
-            if p["account"] in order:
-                s["death_order"][order[p["account"]]] += 1
-            if p.get("tele"):
-                s["tele_games"] += 1
-                for k in TELE_KEYS:
-                    s["tele"][k] += p["tele"].get(k, 0)
     return dict(sorted(agg.items(), key=lambda kv: -kv[1]["games"]))
 
 
@@ -543,12 +411,12 @@ def recap_html(group, prev_group, rp_now, rp_prev):
     </div></body></html>"""
 
 
-def render_png(html, width=960):
+def render_png(html):
     """HTML → PNG via Chromium headless (Playwright)."""
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         b = p.chromium.launch()
-        pg = b.new_page(viewport={"width": width, "height": 200}, device_scale_factor=2)
+        pg = b.new_page(viewport={"width": 960, "height": 600}, device_scale_factor=2)
         pg.set_content(html, wait_until="networkidle")
         png = pg.screenshot(full_page=True)
         b.close()
@@ -564,114 +432,22 @@ def build_recap(group, prev_group, rp_now, rp_prev):
     return embed, render_png(recap_html(group, prev_group, rp_now, rp_prev))
 
 
-def detail_html(group, rp_now, rp_prev):
-    """Deuxième message : tableaux façon Twire, cumulés sur la session."""
-    agg_all = aggregate(group)
-    n = len(group)
-    agg, randoms = split_randoms(agg_all, n)
-    start = group[0]["created_at"]
-    end = group[-1]["created_at"] + group[-1]["duration"]
-    players = sorted(agg.items(), key=lambda kv: -rating(kv[1], n))
-    rp_by_alias = {}
-    for acc, raw, r in rp_now:
-        if r and alias(raw) not in randoms and alias(raw) not in rp_by_alias:
-            delta = r["rp"] - rp_prev[acc] if acc in rp_prev else None
-            rp_by_alias[alias(raw)] = (r["tier"], r["rp"], delta)
-
-    def num(v, d=0):
-        return f"{v:,.{d}f}".replace(",", " ")
-
-    def col(v, good, bad):
-        return "g" if v >= good else "r" if v < bad else ""
-
-    def cell(v, cls=""):
-        return f'<td class="{cls}">{v}</td>'
-
-    combat = ""
-    survie = ""
-    for pos, (name, st) in enumerate(players, 1):
-        g, t, tg = st["games"], st["tele"], st["tele_games"]
-        rt = rating(st, n)
-        kd = st["kills"] / max(1, sum(st["death_order"]))
-        conv = st["kills"] / st["dbnos"] if st["dbnos"] else 0
-        hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
-        tele = lambda k, d=0: num(t[k], d) if tg else "–"
-        ratio = (t["taken"] and st["damage"] * tg / g / t["taken"]) if tg else None
-        rp = rp_by_alias.get(name)
-        rang = (f'<span style="color:{TIER_COLORS.get(rp[0].split()[0], "#aaa")}">{esc(rp[0])}</span> · {rp[1]}'
-                + (f' <span class="{"g" if rp[2] >= 0 else "r"}">{rp[2]:+d}</span>' if rp and rp[2] is not None else "")) if rp else ""
-        combat += (f'<tr><td class="l name">{pos}&nbsp; {esc(name)}{"" if g == n else f" <span class=dim>{g}/{n}</span>"}</td>'
-                   + cell(f"{rt:.2f}", "g" if rt >= 1.15 else "o" if rt >= 0.85 else "r")
-                   + cell(st["kills"]) + cell(st["dbnos"]) + cell(f"{conv:.1f}", col(conv, 1.0, 0.9) if st["dbnos"] else "")
-                   + cell(st["assists"]) + cell(num(st["damage"] / g)) + cell(f"{kd:.1f}")
-                   + cell(tele("dmg_ar")) + cell(tele("dmg_dmr")) + cell(tele("dmg_sr")) + cell(tele("dmg_smg"))
-                   + cell(num(t["taken"] / tg) if tg else "–", "dim")
-                   + cell(f"{ratio:.1f}" if ratio else "–", col(ratio, 1.5, 1.0) if ratio else "")
-                   + cell(tele("stolen")) + cell(tele("lost")) + cell(hs) + cell(f"{st['longest']:.0f} m")
-                   + f'<td class="l dim">{rang}</td></tr>')
-        do = st["death_order"]
-        survie += (f'<tr><td class="l name">{esc(name)}</td>'
-                   + cell(do[0], "r" if do[0] * 2 > g else "") + cell(do[1]) + cell(do[2]) + cell(do[3], "g" if do[3] * 2 > g else "")
-                   + cell(g - sum(do)) + cell(tele("knocked")) + cell(tele("revived")) + cell(st["revives"])
-                   + cell(st["heals"]) + cell(st["boosts"]) + cell(num(t["taken_zone"]) if tg else "–", "dim")
-                   + cell(tele("gren")) + cell(num(t["dmg_gren"]) if tg else "–") + cell(tele("molo")) + cell(tele("smoke")) + cell(tele("flash"))
-                   + cell(f"{st['dist'] / 1000:.1f} km") + cell(st["vehicles"]) + "</tr>")
-    names = ", ".join(agg.keys())
-    partial = any(st["tele_games"] < st["games"] for _, st in players)
-    note = " · stats télémétrie partielles (matchs anciens)" if partial else ""
-    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: #1e1f22; font-family: Inter, "Segoe UI", Roboto, sans-serif; color: #dbdee1; width: 1100px; }}
-    .card {{ padding: 24px 30px 18px; border-left: 6px solid #5865f2; }}
-    h1 {{ margin: 0; font-size: 22px; font-weight: 800; color: #fff; }}
-    .sub {{ color: #949ba4; font-size: 14px; margin-top: 3px; }}
-    h2 {{ font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #949ba4; margin: 18px 0 6px; }}
-    table {{ border-collapse: separate; border-spacing: 0 4px; width: 100%; font-size: 12.5px; }}
-    th {{ color: #949ba4; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; text-align: center; padding: 0 5px 3px; white-space: nowrap; }}
-    th.l, td.l {{ text-align: left; }}
-    td {{ background: #26282c; text-align: center; padding: 7px 5px; color: #fff; font-weight: 600; white-space: nowrap; }}
-    tr td:first-child {{ border-radius: 8px 0 0 8px; }} tr td:last-child {{ border-radius: 0 8px 8px 0; }}
-    td.name {{ font-weight: 800; font-size: 13px; }} td.dim, .dim {{ color: #949ba4; font-weight: 500; }}
-    .g {{ color: #57f287; }} .r {{ color: #ed4245; }} .o {{ color: #f2a900; }}
-    .foot {{ margin-top: 10px; font-size: 11.5px; color: #6d7079; display: flex; justify-content: space-between; }}
-    </style></head><body><div class="card">
-      <h1>Détail — {esc(fmt_dt(start))} → {datetime.fromtimestamp(end):%Hh%M}</h1>
-      <div class="sub">{n} partie{'s' if n > 1 else ''} · {esc(names)}{note}</div>
-      <h2>Combat</h2>
-      <table><tr><th class="l">Joueur</th><th>Rating</th><th>Kills</th><th>Knocks</th><th>Conv.</th><th>Assists</th><th>Dég/p</th><th>K/D</th>
-      <th>Dég. AR</th><th>Dég. DMR</th><th>Dég. SR</th><th>Dég. SMG</th><th>Subis/p</th><th>Inf./subis</th><th>Volés</th><th>Perdus</th><th>HS</th><th>Longest</th><th class="l">Rang</th></tr>{combat}</table>
-      <h2>Survie &amp; utilitaire</h2>
-      <table><tr><th class="l">Joueur</th><th>Mort 1er</th><th>2e</th><th>3e</th><th>4e</th><th>Vivant</th><th>Knocké</th><th>Réanimé</th><th>Revives</th><th>Heals</th><th>Boosts</th><th>Dég. zone</th>
-      <th>Grenades</th><th>Dég. gren.</th><th>Molotov</th><th>Smokes</th><th>Flash</th><th>Distance</th><th>Véhic.</th></tr>{survie}</table>
-      <div class="foot"><span>Conv. = kills ÷ knocks · Volés = kills finis sur un knock d'un coéquipier · Perdus = tes knocks finis par un coéquipier · dégâts hors joueurs au sol</span><span>mis à jour {datetime.now():%Hh%M}</span></div>
-    </div></body></html>"""
-
-
-def build_detail(group, rp_now, rp_prev):
-    start = group[0]["created_at"]
-    end = group[-1]["created_at"] + group[-1]["duration"]
-    embed = {"title": f"📊  Détail — {fmt_dt(start)} → {datetime.fromtimestamp(end):%Hh%M}",
-             "color": 0x5865F2, "image": {"url": "attachment://detail.png"}}
-    return embed, render_png(detail_html(group, rp_now, rp_prev), width=1100)
-
-
 # ---------------------------------------------------------------- Discord (webhook)
 
-def webhook_post(embed, png, fname="recap.png"):
+def webhook_post(embed, png):
     payload = {"embeds": [embed], "attachments": []}
     r = requests.post(WEBHOOK, params={"wait": "true"}, data={"payload_json": json.dumps(payload)},
-                      files={"files[0]": (fname, png, "image/png")}, timeout=60)
+                      files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
     r.raise_for_status()
     return r.json()["id"]
 
 
-def webhook_edit(message_id, embed, png, fname="recap.png"):
+def webhook_edit(message_id, embed, png):
     payload = {"embeds": [embed], "attachments": []}  # attachments vide = on remplace l'ancienne image
     r = requests.patch(f"{WEBHOOK}/messages/{message_id}", data={"payload_json": json.dumps(payload)},
-                       files={"files[0]": (fname, png, "image/png")}, timeout=60)
+                       files={"files[0]": ("recap.png", png, "image/png")}, timeout=60)
     if r.status_code == 404:  # message supprimé à la main → on reposte
-        return webhook_post(embed, png, fname)
+        return webhook_post(embed, png)
     r.raise_for_status()
     return message_id
 
@@ -679,7 +455,7 @@ def webhook_edit(message_id, embed, png, fname="recap.png"):
 def publish(groups, idx, force=False):
     group = groups[idx]
     key = group[0]["id"]
-    row = DB.execute("SELECT message_id, n_matches, detail_id FROM sessions WHERE first_match=?", (key,)).fetchone()
+    row = DB.execute("SELECT message_id, n_matches FROM sessions WHERE first_match=?", (key,)).fetchone()
     if not force and row and row[1] == len(group):
         return  # rien de nouveau
 
@@ -698,17 +474,9 @@ def publish(groups, idx, force=False):
     embed, png = build_recap(group, prev_group, rp_now, rp_prev)
 
     msg_id = webhook_edit(row[0], embed, png) if row and row[0] else webhook_post(embed, png)
-    # deuxième message : détail façon Twire, juste en dessous
-    detail_id = row[2] if row else None
-    if CONFIG.get("detail", True):
-        try:
-            d_embed, d_png = build_detail(group, rp_now, rp_prev)
-            detail_id = webhook_edit(detail_id, d_embed, d_png, "detail.png") if detail_id else webhook_post(d_embed, d_png, "detail.png")
-        except Exception as e:
-            print("détail :", repr(e))
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
-    DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id) VALUES (?,?,?,?,?,?)",
-               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id))
+    DB.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?,?)",
+               (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store)))
     DB.commit()
     print("recap", "édité" if row else "posté", f"({len(group)} matchs)")
 
@@ -869,9 +637,7 @@ def run_once(force=False):
 
 
 if __name__ == "__main__":
-    if "--backfill" in sys.argv:
-        backfill_telemetry()
-    elif "--reports-test" in sys.argv:
+    if "--reports-test" in sys.argv:
         i = sys.argv.index("--reports-test")
         n = int(sys.argv[i + 1]) if len(sys.argv) > i + 1 and sys.argv[i + 1].isdigit() else 3
         pubg_report(test=n)

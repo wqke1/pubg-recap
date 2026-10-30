@@ -40,7 +40,6 @@ jobs:
         run: |
           git config user.name "pubg-bot"
           git config user.email "pubg-bot@users.noreply.github.com"
-          python pubg_recap.py --backfill || true
           if [ "${{ inputs.recap }}" = "true" ]; then
             python pubg_recap.py --recap || true
           fi
