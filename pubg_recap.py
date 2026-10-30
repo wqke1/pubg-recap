@@ -9,7 +9,8 @@
 
     python3 pubg_recap.py           # boucle (laisser tourner)
     python3 pubg_recap.py --recap   # force le recap de la session en cours maintenant
-    python3 pubg_recap.py --once    # un seul passage (pour cron)
+    python3 pubg_recap.py --once    # un seul passage complet (matchs, recap, relevé RP, clips)
+    python3 pubg_recap.py --quick   # passage léger : matchs + recap seulement
     python3 pubg_recap.py --reports # poste les nouveaux clips pubg.report (salon dédié)
     python3 pubg_recap.py --reports-test 6  # reposte les 6 derniers clips (test du rendu)
 """
@@ -928,7 +929,9 @@ def rp_snapshot():
     DB.commit()
 
 
-def run_once(force=False):
+def run_once(force=False, quick=False):
+    """quick : seulement la détection des parties et le recap (toutes les minutes) ;
+    le relevé RP (11 appels API) est réservé aux passages complets, toutes les 5 min."""
     poll()
     groups = sessions()
     if not groups:
@@ -942,7 +945,8 @@ def run_once(force=False):
         todays = [len(groups) - 1]  # rien aujourd'hui → dernière session connue
     for i in todays:
         publish(groups, i, force=force)
-    rp_snapshot()
+    if not quick:
+        rp_snapshot()
 
 
 if __name__ == "__main__":
@@ -956,6 +960,8 @@ if __name__ == "__main__":
         pubg_report()
     elif "--recap" in sys.argv:
         run_once(force=True)
+    elif "--quick" in sys.argv:
+        run_once(quick=True)
     elif "--once" in sys.argv:
         run_once()
         pubg_report()

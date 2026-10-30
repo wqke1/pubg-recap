@@ -45,13 +45,16 @@ jobs:
             python pubg_recap.py --recap || true
           fi
           END=$((SECONDS + 330*60))
+          N=0
           while [ $SECONDS -lt $END ]; do
             echo "=== $(date '+%H:%M') ==="
             git pull -q --rebase || true
-            python pubg_recap.py --once || true
+            # toutes les minutes : nouvelles parties + recap ; toutes les 5 min : passage complet (relevé RP, clips pubg.report)
+            if [ $((N % 5)) -eq 0 ]; then python pubg_recap.py --once || true; else python pubg_recap.py --quick || true; fi
+            N=$((N + 1))
             git add recap.db
             git diff --cached --quiet || { git commit -qm "db $(date -u +%Y-%m-%dT%H:%M)" && git push -q || true; }
-            sleep 300
+            sleep 60
           done
 
       - name: Relancer le run suivant
