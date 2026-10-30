@@ -400,9 +400,8 @@ def esc(t):
 
 
 def recap_html(group, rp_now, rp_prev):
-    agg_all = aggregate(group)
+    agg = aggregate(group)  # tout le monde, randoms compris, chacun sa ligne
     n = len(group)
-    agg, randoms = split_randoms(agg_all, n)
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
     dur = sum(m["duration"] for m in group)
@@ -414,7 +413,7 @@ def recap_html(group, rp_now, rp_prev):
 
     rp_by_alias = defaultdict(list)
     for acc, raw, r in rp_now:
-        if r and alias(raw) not in randoms:
+        if r:
             delta = r["rp"] - rp_prev[acc] if acc in rp_prev else None
             rp_by_alias[alias(raw)].append((raw, r["tier"], r["rp"], delta))
 
@@ -427,37 +426,22 @@ def recap_html(group, rp_now, rp_prev):
     rows = ""
     ranked_players = sorted(agg.items(), key=lambda kv: -rating(kv[1], n))
     for pos, (name, st) in enumerate(ranked_players, 1):
-        hs = f"{100 * st['hs'] / st['kills']:.0f}%" if st["kills"] else "–"
         dpp = st["damage"] / st["games"]
+        kda = (st["kills"] + st["assists"]) / max(1, sum(st["death_order"]))
         badges = "".join(badge(t, rp, d, raw, name) for raw, t, rp, d in rp_by_alias.get(name, []))
-        games = f'<span class="games">{st["games"]}/{n}</span>' if st["games"] < n else ""
+        cnt = f'<small>{st["games"]}/{n}</small>' if st["games"] < n else ""
+        shown = name if len(name) <= 14 else name[:13] + "…"
         rt = rating(st, n)
         rows += f"""
         <div class="row">
-          <div class="pos">{pos}</div>
-          <div class="who"><div class="name">{esc(name)}{games}</div><div class="badges">{badges}</div></div>
+          <div class="pos">{pos}{cnt}</div>
+          <div class="who"><div class="name">{esc(shown)}</div><div class="badges">{badges}</div></div>
           <div class="stat rating" style="--c:{rating_color(rt)}"><b>{rt:.2f}</b><i>rating</i></div>
           <div class="stat"><b>{st['kills']}</b><i>kills</i></div>
           <div class="stat"><b>{st['assists']}</b><i>assists</i></div>
+          <div class="stat"><b>{kda:.1f}</b><i>KDA</i></div>
           <div class="stat dmg"><b>{dpp:.0f}</b><i>dég/p</i><div class="bar"><div style="width:{100 * dpp / max_dmg:.0f}%"></div></div></div>
-          <div class="stat"><b>{hs}</b><i>HS</i></div>
           <div class="stat"><b>{fmt_time(st['survived'] / st['games'])}</b><i>survie</i></div>
-          <div class="stat"><b>{st['revives']}</b><i>revives</i></div>
-        </div>"""
-    if randoms:
-        r = {k: sum(v[k] for v in randoms.values()) for k in ("games", "kills", "assists", "damage", "hs", "survived", "revives")}
-        hs = f"{100 * r['hs'] / r['kills']:.0f}%" if r["kills"] else "–"
-        rows += f"""
-        <div class="row random">
-          <div class="pos"></div>
-          <div class="who"><div class="name">Randoms <span class="games">×{len(randoms)}</span></div></div>
-          <div class="stat rating"><b>{rating(r):.2f}</b><i>rating</i></div>
-          <div class="stat"><b>{r['kills']}</b><i>kills</i></div>
-          <div class="stat"><b>{r['assists']}</b><i>assists</i></div>
-          <div class="stat dmg"><b>{r['damage'] / r['games']:.0f}</b><i>dég/p</i></div>
-          <div class="stat"><b>{hs}</b><i>HS</i></div>
-          <div class="stat"><b>{fmt_time(r['survived'] / r['games'])}</b><i>survie</i></div>
-          <div class="stat"><b>{r['revives']}</b><i>revives</i></div>
         </div>"""
 
     sniper = max(agg.items(), key=lambda kv: kv[1]["longest"])
@@ -497,13 +481,12 @@ def recap_html(group, rp_now, rp_prev):
     .kpi small {{ font-size: 15px; font-weight: 600; color: #949ba4; }}
     .row {{ display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 10px; }}
     .row:nth-child(odd) {{ background: #26282c; }}
-    .row.random {{ opacity: .6; }}
-    .pos {{ flex: 0 0 26px; font-size: 20px; font-weight: 800; color: #6d7079; text-align: center; }}
+    .pos {{ flex: 0 0 34px; font-size: 20px; font-weight: 800; color: #6d7079; text-align: center; }}
+    .pos small {{ display: block; font-size: 10px; font-weight: 600; color: #6d7079; margin-top: -2px; }}
     .row:first-child .pos {{ color: #f2a900; }}
     .who {{ flex: 0 0 250px; }}
     .stat.rating b {{ color: var(--c, #949ba4); }}
     .name {{ font-size: 18px; font-weight: 800; color: #fff; }}
-    .games {{ font-size: 12px; color: #949ba4; font-weight: 600; margin-left: 8px; }}
     .badges {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }}
     .badge {{ display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--c);
               background: color-mix(in srgb, var(--c) 14%, transparent); border-radius: 999px; padding: 3px 9px 3px 7px; }}
@@ -544,8 +527,8 @@ def recap_html(group, rp_now, rp_prev):
         <div class="kpi"><b>#{sum(ranks) / n:.1f}</b><i>placement</i></div>
         <div class="kpi{' win' if wins else ''}"><b>{'🏆 ' if wins else ''}#{min(ranks)}{f' <small>×{wins}</small>' if wins > 1 else ''}</b><i>meilleur</i></div>
         <div class="kpi"><b>{top10}/{n}</b><i>top 10</i></div>
-        <div class="kpi"><b>{sum(v['kills'] for v in agg_all.values())}</b><i>kills</i></div>
-        <div class="kpi"><b>{f"{sum(v['damage'] for v in agg_all.values()):,.0f}".replace(",", " ")}</b><i>dégâts</i></div>
+        <div class="kpi"><b>{sum(v['kills'] for v in agg.values())}</b><i>kills</i></div>
+        <div class="kpi"><b>{f"{sum(v['damage'] for v in agg.values()):,.0f}".replace(",", " ")}</b><i>dégâts</i></div>
       </div>
       <div class="rows">{rows}</div>
       <h2>Titres</h2>
