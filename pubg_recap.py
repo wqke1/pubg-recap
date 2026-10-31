@@ -3,7 +3,7 @@
 
 - Toutes les `poll_minutes`, récupère les matchs récents du cercle.
 - Garde uniquement les matchs ranked squad où >= 2 joueurs du cercle sont dans le même roster.
-- Une session = une suite de parties sans pause > `session_gap_hours` (1,5 h), avec ≥ 2 joueurs du cercle en commun.
+- Une session = une suite de parties sans pause > `session_gap_hours` (45 min), avec ≥ 2 joueurs du cercle en commun.
 - `--recap` poste (ou met à jour) toutes les sessions de la journée.
 - Un message par session, posté dès le premier match et édité après chaque match.
 
@@ -317,10 +317,10 @@ def lineup(m):
 
 
 def sessions():
-    """Une session = une suite de parties sans pause de plus de `session_gap_hours` (1,5 h par défaut),
+    """Une session = une suite de parties sans pause de plus de `session_gap_hours` (45 min par défaut),
     avec au moins 2 joueurs du cercle en commun. Quelqu'un qui part ou arrive ne coupe pas la session ;
     une partie qui relie deux sessions en cours (ex. A+B puis A+C puis A+B+C) les fusionne."""
-    gap = CONFIG.get("session_gap_hours", 1.5) * 3600
+    gap = CONFIG.get("session_gap_hours", 0.75) * 3600
     rows = [json.loads(r[0]) for r in DB.execute("SELECT data FROM matches ORDER BY created_at")]
     groups = []  # [(matches, lineup cumulé)]
     for m in rows:

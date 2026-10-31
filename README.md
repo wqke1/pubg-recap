@@ -31,4 +31,4 @@ Onglet Actions → "PUBG recap" → "Run workflow" → cocher "Forcer le recap".
 
 ## Config
 
-`config.json` : `circle`, `aliases`, `session_gap_hours` (pause max entre deux parties d'une même session, 1.5 par défaut), `detail` (false pour couper le message Player stats). Les clés ne sont pas dans ce fichier, elles viennent des secrets.
+`config.json` : `circle`, `aliases`, `session_gap_hours` (pause max entre deux parties d'une même session, 0.75 = 45 min par défaut), `detail` (false pour couper le message Player stats). Les clés ne sont pas dans ce fichier, elles viennent des secrets.
