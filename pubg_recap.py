@@ -3,7 +3,7 @@
 
 - Toutes les `poll_minutes`, récupère les matchs récents du cercle.
 - Garde uniquement les matchs ranked squad où >= 2 joueurs du cercle sont dans le même roster.
-- Une session = une journée de jeu (bascule à 6h, `day_cutoff_hour`) × un lineup du cercle.
+- Une session = une suite de parties sans pause > `session_gap_hours` (1,5 h), avec ≥ 2 joueurs du cercle en commun.
 - `--recap` poste (ou met à jour) toutes les sessions de la journée.
 - Un message par session, posté dès le premier match et édité après chaque match.
 
@@ -317,14 +317,23 @@ def lineup(m):
 
 
 def sessions():
-    """Une session = une journée de jeu (bascule à `day_cutoff_hour`) × un lineup du cercle."""
-    cutoff = CONFIG.get("day_cutoff_hour", 6) * 3600
+    """Une session = une suite de parties sans pause de plus de `session_gap_hours` (1,5 h par défaut),
+    avec au moins 2 joueurs du cercle en commun. Quelqu'un qui part ou arrive ne coupe pas la session ;
+    une partie qui relie deux sessions en cours (ex. A+B puis A+C puis A+B+C) les fusionne."""
+    gap = CONFIG.get("session_gap_hours", 1.5) * 3600
     rows = [json.loads(r[0]) for r in DB.execute("SELECT data FROM matches ORDER BY created_at")]
-    groups = {}
+    groups = []  # [(matches, lineup cumulé)]
     for m in rows:
-        day = datetime.fromtimestamp(m["created_at"] - cutoff).date()
-        groups.setdefault((day, lineup(m)), []).append(m)
-    return sorted(groups.values(), key=lambda g: g[0]["created_at"])
+        lu = lineup(m)
+        hits = [g for g in groups
+                if m["created_at"] - (g[0][-1]["created_at"] + g[0][-1]["duration"]) <= gap and len(lu & g[1]) >= 2]
+        if not hits:
+            groups.append(([m], set(lu)))
+            continue
+        merged = (sorted(sum((g[0] for g in hits), []) + [m], key=lambda x: x["created_at"]),
+                  set().union(lu, *(g[1] for g in hits)))
+        groups = [g for g in groups if g not in hits] + [merged]
+    return sorted((g[0] for g in groups), key=lambda g: g[0]["created_at"])
 
 
 def aggregate(group):
@@ -747,7 +756,7 @@ def publish(groups, idx, force=False):
     rp_prev = json.loads(row[3]) if row and row[3] else None
     if rp_prev is None:
         # le relevé ne vaut que pour une session nouvelle : pour une session déjà postée il serait postérieur à ses parties
-        rp_prev = dict(rp_snapshot_load()) if row is None else {}
+        rp_prev = dict(rp_snapshot_load(before=group[0]["created_at"])) if row is None else {}
         for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
                                      (key, group[0]["created_at"])):
             for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
@@ -912,9 +921,17 @@ def pubg_report(test=0):
     print(f"pubg.report : {len(clips)} clip(s) posté(s)")
 
 
-def rp_snapshot_load():
+def rp_snapshot_load(before=None):
+    """Dernier relevé RP ; vide s'il est postérieur à `before` (la session a commencé avant le relevé)."""
     row = DB.execute("SELECT v FROM kv WHERE k='rp_last'").fetchone()
-    return json.loads(row[0]) if row else {}
+    if not row:
+        return {}
+    d = json.loads(row[0])
+    if "rp" not in d:  # ancien format sans horodatage
+        return {} if before else d
+    if before and d["t"] > before:
+        return {}
+    return d["rp"]
 
 
 def rp_snapshot():
@@ -925,7 +942,7 @@ def rp_snapshot():
         r = ranked_stats(acc)
         if r:
             snap[acc] = r["rp"]
-    DB.execute("INSERT OR REPLACE INTO kv VALUES ('rp_last', ?)", (json.dumps(snap),))
+    DB.execute("INSERT OR REPLACE INTO kv VALUES ('rp_last', ?)", (json.dumps({"t": time.time(), "rp": snap}),))
     DB.commit()
 
 
@@ -937,16 +954,26 @@ def run_once(force=False, quick=False):
     if not groups:
         print("Aucun match ranked trouvé.")
         return
-    cutoff = CONFIG.get("day_cutoff_hour", 6) * 3600
-    today = datetime.fromtimestamp(time.time() - cutoff).date()
-    todays = [i for i, g in enumerate(groups)
-              if datetime.fromtimestamp(g[0]["created_at"] - cutoff).date() == today]
-    if not todays:
-        todays = [len(groups) - 1]  # rien aujourd'hui → dernière session connue
-    for i in todays:
+    # sessions encore "ouvertes" (dernière partie il y a moins de 24 h), sinon la dernière connue
+    recent = [i for i, g in enumerate(groups) if time.time() - g[-1]["created_at"] < 86400] or [len(groups) - 1]
+    for i in recent:
         publish(groups, i, force=force)
+    cleanup_sessions(groups)
     if not quick:
         rp_snapshot()
+
+
+def cleanup_sessions(groups):
+    """Un message dont la session n'existe plus (découpage changé, parties réattribuées) est supprimé."""
+    firsts = {g[0]["id"] for g in groups}
+    for key, mid in DB.execute("SELECT first_match, message_id FROM sessions WHERE started_at > ?",
+                               (time.time() - 7 * 86400,)).fetchall():
+        if key not in firsts:
+            if mid:
+                requests.delete(f"{WEBHOOK}/messages/{mid}", timeout=30)
+            DB.execute("DELETE FROM sessions WHERE first_match=?", (key,))
+            print("session orpheline supprimée", key)
+    DB.commit()
 
 
 if __name__ == "__main__":
