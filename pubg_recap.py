@@ -316,8 +316,16 @@ def lineup(m):
     return frozenset(alias(p["name"]) for p in m["players"] if alias(p["name"]) in CIRCLE)
 
 
+def squad_out(m):
+    """Moment où le cercle sort de la partie : mort du dernier joueur du cercle, ou fin du match s'il reste en vie."""
+    circle = [p for p in m["players"] if alias(p["name"]) in CIRCLE]
+    if any(p.get("alive") for p in circle):
+        return m["created_at"] + m["duration"]
+    return m["created_at"] + max((p["survived"] for p in circle), default=m["duration"])
+
+
 def sessions():
-    """Une session = une suite de parties sans pause de plus de `session_gap_hours` (45 min par défaut),
+    """Une session = une suite de parties sans pause de plus de `session_gap_hours` (45 min par défaut, comptées depuis la mort du cercle),
     avec au moins 2 joueurs du cercle en commun. Quelqu'un qui part ou arrive ne coupe pas la session ;
     une partie qui relie deux sessions en cours (ex. A+B puis A+C puis A+B+C) les fusionne."""
     gap = CONFIG.get("session_gap_hours", 0.75) * 3600
@@ -326,7 +334,7 @@ def sessions():
     for m in rows:
         lu = lineup(m)
         hits = [g for g in groups
-                if m["created_at"] - (g[0][-1]["created_at"] + g[0][-1]["duration"]) <= gap and len(lu & g[1]) >= 2]
+                if m["created_at"] - squad_out(g[0][-1]) <= gap and len(lu & g[1]) >= 2]
         if not hits:
             groups.append(([m], set(lu)))
             continue
