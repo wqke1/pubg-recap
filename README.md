@@ -23,7 +23,7 @@ Chaque match stocke aussi ses stats télémétrie (dégâts par type d'arme, sub
 
 ## Si ça s'arrête
 
-Onglet Actions → "PUBG recap" → "Run workflow". Un seul run doit être en cours à la fois (le `concurrency` s'en charge).
+Un second workflow ("PUBG watchdog", toutes les 30 min) relance la boucle s'il n'y a plus de run en cours (runner GitHub coupé, etc.). Sinon : onglet Actions → "PUBG recap" → "Run workflow". Un seul run doit être en cours à la fois (le `concurrency` s'en charge).
 
 ## Forcer un recap
 

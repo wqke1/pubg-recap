@@ -1,0 +1,22 @@
+name: PUBG watchdog
+# Filet de sécurité : si aucun run "PUBG recap" n'est en cours (runner GitHub coupé net, relance ratée…), on en relance un.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Relancer la boucle si elle ne tourne plus
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          running=$(gh run list -R ${{ github.repository }} --workflow pubg.yml --status in_progress --json databaseId --jq 'length')
+          queued=$(gh run list -R ${{ github.repository }} --workflow pubg.yml --status queued --json databaseId --jq 'length')
+          echo "en cours: $running, en attente: $queued"
+          if [ "$running" = "0" ] && [ "$queued" = "0" ]; then
+            echo "Boucle arrêtée → relance"
+            gh workflow run pubg.yml -R ${{ github.repository }}
+          fi
