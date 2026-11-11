@@ -31,10 +31,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: |
+      - name: Installation (Chromium ; dépendances apt facultatives)
+        run: |
           pip install -q requests playwright
-          python -m playwright install --with-deps chromium > /dev/null
-          sudo apt-get install -y -qq fonts-noto-color-emoji > /dev/null
+          python -m playwright install chromium > /dev/null
+          # Les miroirs apt de GitHub tombent parfois : 3 essais courts, puis on continue sans
+          # (le runner a déjà les libs de Chrome ; au pire les emojis s'affichent mal).
+          for i in 1 2 3; do
+            if timeout 150 sudo apt-get update -qq \
+               && timeout 240 sudo env PATH="$PATH" python -m playwright install-deps chromium > /dev/null \
+               && timeout 150 sudo apt-get install -y -qq fonts-noto-color-emoji > /dev/null; then
+              echo "dépendances apt OK"; break
+            fi
+            echo "apt indisponible (essai $i)"; sleep 20
+          done
 
       - name: Boucle (script toutes les 5 min pendant ~5h30)
         run: |
