@@ -327,14 +327,17 @@ def squad_out(m):
 def sessions():
     """Une session = une suite de parties sans pause de plus de `session_gap_hours` (45 min par défaut, comptées depuis la mort du cercle),
     avec au moins 2 joueurs du cercle en commun. Quelqu'un qui part ou arrive ne coupe pas la session ;
-    une partie qui relie deux sessions en cours (ex. A+B puis A+C puis A+B+C) les fusionne."""
+    une partie qui relie deux sessions en cours (ex. A+B puis A+C puis A+B+C) les fusionne.
+    Exception : repasser à une squad complète du cercle (4, sans random) ouvre une nouvelle session."""
     gap = CONFIG.get("session_gap_hours", 0.75) * 3600
     rows = [json.loads(r[0]) for r in DB.execute("SELECT data FROM matches ORDER BY created_at")]
     groups = []  # [(matches, lineup cumulé)]
     for m in rows:
         lu = lineup(m)
+        full = len(lu) >= 4  # squad complète du cercle, sans random
         hits = [g for g in groups
-                if m["created_at"] - squad_out(g[0][-1]) <= gap and len(lu & g[1]) >= 2]
+                if m["created_at"] - squad_out(g[0][-1]) <= gap and len(lu & g[1]) >= 2
+                and not (full and len(lineup(g[0][-1])) < 4)]  # on relance à 4 sans random → nouvelle session
         if not hits:
             groups.append(([m], set(lu)))
             continue
@@ -386,10 +389,10 @@ def fmt_dt(ts):
 
 
 def split_randoms(agg, n):
-    """Hors cercle et moins de la moitié des parties → random. Retourne (joueurs, randoms)."""
+    """Hors cercle et pas plus de la moitié des parties → random de passage. Retourne (joueurs, randoms)."""
     players, randoms = {}, {}
     for name, s in agg.items():
-        if name in CIRCLE or s["games"] * 2 >= n:
+        if name in CIRCLE or s["games"] * 2 > n:
             players[name] = s
         else:
             randoms[name] = s
@@ -423,8 +426,8 @@ def esc(t):
 
 
 def recap_html(group, rp_now, rp_prev):
-    agg = aggregate(group)  # tout le monde, randoms compris, chacun sa ligne
     n = len(group)
+    agg, randoms = split_randoms(aggregate(group), n)  # randoms de passage (< moitié des parties) : pas de ligne
     start = group[0]["created_at"]
     end = group[-1]["created_at"] + group[-1]["duration"]
     dur = sum(m["duration"] for m in group)
@@ -487,7 +490,7 @@ def recap_html(group, rp_now, rp_prev):
         surv = max(p["survived"] for p in m["players"])
         games_html += f"""<div class="game {cls}"><span class="gi">{i}</span><span class="gt">{datetime.fromtimestamp(m['created_at']):%Hh%M}</span><span class="gm">{esc(m['map'])}</span>
             <span class="gs">{k} kills</span><span class="gs">{dmg:,.0f} dég</span><span class="gs">⏱ {fmt_time(surv)}</span>{top}<span class="gr">#{m['rank']}</span></div>""".replace(",", " ")
-    names = ", ".join(agg.keys())
+    names = ", ".join(agg.keys()) + (f" + {len(randoms)} random{'s' if len(randoms) > 1 else ''}" if randoms else "")
 
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
