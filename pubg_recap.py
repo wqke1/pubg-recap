@@ -76,17 +76,19 @@ CIRCLE = {alias(n) for n in CONFIG["circle"]}
 def api(path, **params):
     r = requests.get(API + path, headers=HEADERS, params=params, timeout=30)
     if r.status_code == 429:
-        print("rate limit PUBG, pause 60s...")
-        time.sleep(61)
+        reset = int(r.headers.get("X-Ratelimit-Reset", 0) or 0)
+        wait = min(61, max(2, reset - time.time() + 1)) if reset else 61
+        print(f"rate limit PUBG, pause {wait:.0f}s...")
+        time.sleep(wait)
         return api(path, **params)
     r.raise_for_status()
     return r.json()
 
 
-def recent_match_ids():
+def recent_match_ids(extra=True):
     names = CONFIG["circle"]
     ids = set()
-    for i in range(0, len(names), 10):  # 10 pseudos max par requête
+    for i in range(0, len(names) if extra else 10, 10):  # 10 pseudos max par requête
         d = api("/players", **{"filter[playerNames]": ",".join(names[i:i + 10])})
         for p in d["data"]:
             ids.update(m["id"] for m in p["relationships"]["matches"]["data"])
@@ -270,18 +272,21 @@ def backfill_telemetry(days=7):
             print(f"  {k}/{len(todo)} ok")
 
 
-def poll():
-    ids = [m for m in recent_match_ids() if not DB.execute("SELECT 1 FROM seen WHERE id=?", (m,)).fetchone()]
+def poll(extra=True):
+    ids = [m for m in recent_match_ids(extra) if not DB.execute("SELECT 1 FROM seen WHERE id=?", (m,)).fetchone()]
     print(f"{len(ids)} nouveaux matchs à analyser...")
+    new = []
     for i, mid in enumerate(ids, 1):
         m = parse_match(api(f"/matches/{mid}"))  # /matches ne compte pas dans le rate limit
         print(f"  {i}/{len(ids)}", "ranked ✓" if m else "ignoré")
         if m:
-            enrich_telemetry(m)
+            # la télémétrie (gros fichier) est téléchargée après le premier post, voir run_once
             DB.execute("INSERT OR IGNORE INTO matches VALUES (?,?,?,?)",
                        (m["id"], m["created_at"], m["duration"], json.dumps(m)))
+            new.append(m)
         DB.execute("INSERT OR IGNORE INTO seen VALUES (?)", (mid,))
     DB.commit()
+    return new
 
 
 def current_season():
@@ -297,7 +302,16 @@ def current_season():
     return sid
 
 
+_RANKED = {}  # mémo le temps d'un passage : le recap est publié deux fois de suite (avant/après télémétrie)
+
+
 def ranked_stats(account):
+    if account not in _RANKED:
+        _RANKED[account] = _ranked_stats(account)
+    return _RANKED[account]
+
+
+def _ranked_stats(account):
     try:
         d = api(f"/players/{account}/seasons/{current_season()}/ranked")
         s = d["data"]["attributes"]["rankedGameModeStats"].get("squad")
@@ -684,7 +698,7 @@ def detail_html(group, rp_now, rp_prev, width=1640):
       bodies.append(body)
     tables = "".join(f"<table>{head}{b}</table>" for b in bodies)
     partial = any(st["tele_games"] < st["games"] for _, st in players)
-    note = " · telemetry partial on older matches" if partial else ""
+    note = " · telemetry still loading or partial on some matches" if partial else ""
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
     * {{ box-sizing: border-box; }}
@@ -767,7 +781,8 @@ def publish(groups, idx, force=False):
     rp_prev = json.loads(row[3]) if row and row[3] else None
     if rp_prev is None:
         # le relevé ne vaut que pour une session nouvelle : pour une session déjà postée il serait postérieur à ses parties
-        rp_prev = dict(rp_snapshot_load(before=group[0]["created_at"])) if row is None else {}
+        # relevé pris avant la fin de la 1re partie = RP d'avant la session
+        rp_prev = rp_before(group[0]["created_at"] + 60) if row is None else {}
         for (rp_json,) in DB.execute("SELECT rp FROM sessions WHERE first_match!=? AND started_at<? ORDER BY started_at DESC",
                                      (key, group[0]["created_at"])):
             for acc, rp in (json.loads(rp_json) if rp_json else {}).items():
@@ -787,6 +802,8 @@ def publish(groups, idx, force=False):
         requests.delete(f"{WEBHOOK}/messages/{detail_id}", timeout=30)
         detail_id = None
     rp_store = {acc: r["rp"] for acc, _, r in rp_now if r}
+    circle_acc = circle_accounts()
+    rp_hist_add({acc: rp for acc, rp in rp_store.items() if acc in circle_acc})
     DB.execute("INSERT OR REPLACE INTO sessions (first_match, started_at, message_id, n_matches, rp, detail_id, rp_start) VALUES (?,?,?,?,?,?,?)",
                (key, group[0]["created_at"], msg_id, len(group), json.dumps(rp_store), detail_id, json.dumps(rp_prev)))
     DB.commit()
@@ -932,35 +949,47 @@ def pubg_report(test=0):
     print(f"pubg.report : {len(clips)} clip(s) posté(s)")
 
 
-def rp_snapshot_load(before=None):
-    """Dernier relevé RP ; vide s'il est postérieur à `before` (la session a commencé avant le relevé)."""
-    row = DB.execute("SELECT v FROM kv WHERE k='rp_last'").fetchone()
-    if not row:
-        return {}
-    d = json.loads(row[0])
-    if "rp" not in d:  # ancien format sans horodatage
-        return {} if before else d
-    if before and d["t"] > before:
-        return {}
-    return d["rp"]
+def rp_hist_load():
+    """{account: [[t, rp], ...]} : derniers relevés RP de chaque compte du cercle, du plus ancien au plus récent."""
+    row = DB.execute("SELECT v FROM kv WHERE k='rp_hist'").fetchone()
+    return json.loads(row[0]) if row else {}
 
 
-def rp_snapshot():
-    """RP courant de chaque compte du cercle, relevé à chaque passage : sert de point de départ
-    (RP avant la première partie) quand une nouvelle session démarre."""
-    snap = rp_snapshot_load()
-    for acc in circle_accounts():
-        r = ranked_stats(acc)
-        if r:
-            snap[acc] = r["rp"]
-    DB.execute("INSERT OR REPLACE INTO kv VALUES ('rp_last', ?)", (json.dumps({"t": time.time(), "rp": snap}),))
+def rp_hist_add(samples):
+    hist = rp_hist_load()
+    now = time.time()
+    for acc, rp in samples.items():
+        hist[acc] = (hist.get(acc, []) + [[now, rp]])[-12:]
+    DB.execute("INSERT OR REPLACE INTO kv VALUES ('rp_hist', ?)", (json.dumps(hist),))
     DB.commit()
 
 
-def run_once(force=False, quick=False):
-    """quick : seulement la détection des parties et le recap (toutes les minutes) ;
-    le relevé RP (11 appels API) est réservé aux passages complets, toutes les 5 min."""
-    poll()
+def rp_before(ts):
+    """RP de chaque compte tel que relevé avant `ts` (dernier relevé antérieur)."""
+    out = {}
+    for acc, samples in rp_hist_load().items():
+        older = [rp for t, rp in samples if t <= ts]
+        if older:
+            out[acc] = older[-1]
+    return out
+
+
+def rp_snapshot(n):
+    """Relève le RP d'un compte du cercle par passage, à tour de rôle (quota API) : sert de point de départ
+    (RP avant la première partie) quand une nouvelle session démarre."""
+    accs = sorted(circle_accounts())
+    if not accs:
+        return
+    acc = accs[n % len(accs)]
+    r = ranked_stats(acc)
+    if r:
+        rp_hist_add({acc: r["rp"]})
+
+
+def run_once(force=False, n=0):
+    """Un passage (toutes les 20 s) : nouvelles parties → recap posté tout de suite → télémétrie → message complété.
+    `n` = numéro du passage, pour étaler les appels API (quota de 10 requêtes/min)."""
+    new = poll(extra=n % 3 == 0)
     groups = sessions()
     if not groups:
         print("Aucun match ranked trouvé.")
@@ -968,10 +997,26 @@ def run_once(force=False, quick=False):
     # sessions encore "ouvertes" (dernière partie il y a moins de 24 h), sinon la dernière connue
     recent = [i for i, g in enumerate(groups) if time.time() - g[-1]["created_at"] < 86400] or [len(groups) - 1]
     for i in recent:
-        publish(groups, i, force=force)
+        publish(groups, i, force=force)  # premier post sans attendre la télémétrie
     cleanup_sessions(groups)
-    if not quick:
-        rp_snapshot()
+    # télémétrie des nouvelles parties (et de celles des 3 dernières heures où elle a échoué), puis message complété
+    seen_new = {m["id"] for m in new}
+    pending = new + [m for (d,) in DB.execute("SELECT data FROM matches WHERE created_at > ?", (time.time() - 3 * 3600,))
+                     for m in [json.loads(d)]
+                     if m["id"] not in seen_new and m.get("telemetry") and any(not p.get("tele") for p in m["players"])]
+    done = set()
+    for m in pending:
+        if enrich_telemetry(m):
+            DB.execute("UPDATE matches SET data=? WHERE id=?", (json.dumps(m), m["id"]))
+            done.add(m["id"])
+    if done:
+        DB.commit()
+        groups = sessions()
+        for i, g in enumerate(groups):
+            if any(x["id"] in done for x in g):
+                publish(groups, i, force=True)
+    if not new and n % 3:  # relevé RP à tour de rôle, hors passages déjà chargés en appels API
+        rp_snapshot(n)
 
 
 def cleanup_sessions(groups):
@@ -998,9 +1043,10 @@ if __name__ == "__main__":
         pubg_report()
     elif "--recap" in sys.argv:
         run_once(force=True)
-    elif "--quick" in sys.argv:
-        run_once(quick=True)
-    elif "--once" in sys.argv:
+    elif "--quick" in sys.argv:  # passage léger ; "--quick N" : numéro du passage
+        i = sys.argv.index("--quick")
+        run_once(n=int(sys.argv[i + 1]) if len(sys.argv) > i + 1 and sys.argv[i + 1].isdigit() else 0)
+    elif "--once" in sys.argv:  # passage + clips pubg.report
         run_once()
         pubg_report()
     else:

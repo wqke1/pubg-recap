@@ -57,14 +57,18 @@ jobs:
           END=$((SECONDS + 330*60))
           N=0
           while [ $SECONDS -lt $END ]; do
-            echo "=== $(date '+%H:%M') ==="
-            git pull -q --rebase || true
-            # toutes les minutes : nouvelles parties + recap ; toutes les 5 min : passage complet (relevé RP, clips pubg.report)
-            if [ $((N % 5)) -eq 0 ]; then python pubg_recap.py --once || true; else python pubg_recap.py --quick || true; fi
+            echo "=== $(date '+%H:%M:%S') ==="
+            # toutes les 20 s : nouvelles parties + recap ; toutes les 5 min : mise à jour du code + clips pubg.report
+            if [ $((N % 15)) -eq 0 ]; then
+              git pull -q --rebase || true
+              python pubg_recap.py --once || true
+            else
+              python pubg_recap.py --quick $N || true
+            fi
             N=$((N + 1))
             git add recap.db
-            git diff --cached --quiet || { git commit -qm "db $(date -u +%Y-%m-%dT%H:%M)" && git push -q || true; }
-            sleep 60
+            git diff --cached --quiet || { git commit -qm "db $(date -u +%Y-%m-%dT%H:%M)" && git pull -q --rebase && git push -q || true; }
+            sleep 20
           done
 
       - name: Relancer le run suivant
